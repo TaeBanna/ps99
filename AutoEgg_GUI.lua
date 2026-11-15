@@ -19,6 +19,8 @@ local ZONE_NAME = "GoldenGrove_Zone"    -- Sections[SECTION_NAME].BREAK_ZONES[ZO
 local EGG_RADIUS = 40                   -- หาไข่ในระยะเท่านี้จากจุดฟาร์ม
 local TP_SAFE_RADIUS = 150              -- วาร์ปได้เฉพาะจุดที่ห่างจากโซนฟาร์มของเราไม่เกินนี้
 local EDGE_MARGIN = 4                   -- ยืนห่างขอบโซนฟาร์มกี่ studs (ตอนขยับเข้าใกล้ไข่)
+local AUTO_REJOIN = true                -- หลุด/โดนเตะ -> เข้าเกมใหม่เอง
+local SCRIPT_URL = "https://raw.githubusercontent.com/TaeBanna/ps99/main/AutoEgg_GUI.lua" -- ใช้รันสคริปต์ซ้ำหลังเข้าเกมใหม่
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -1353,6 +1355,64 @@ if not (getgenv and getgenv().__AutoEggAntiAfk) then
 		pcall(function()
 			VirtualUser:CaptureController()
 			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end)
+end
+
+------------------------------------------------------------------
+-- AUTO REJOIN: เน็ตหลุด / โดนเตะ / เซิร์ฟปิด -> เข้าเกมใหม่เอง
+--  - ดักหน้าต่าง error ของ Roblox (Disconnected, Kicked ฯลฯ)
+--  - ลองเข้าเซิร์ฟเดิมก่อน ไม่ได้ค่อยเข้าเซิร์ฟไหนก็ได้ วนลองจนกว่าจะติด
+--  - queue_on_teleport: เข้าเกมใหม่แล้วรันสคริปต์นี้ต่อเอง (config เดิม -> เข้า event + ฟาร์ม + เปิดไข่ต่อ)
+------------------------------------------------------------------
+if AUTO_REJOIN and not (getgenv and getgenv().__AutoEggRejoin) then
+	if getgenv then getgenv().__AutoEggRejoin = true end
+	local TeleportService = game:GetService("TeleportService")
+	local GuiService = game:GetService("GuiService")
+
+	-- รันสคริปต์ต่อหลังวาร์ป/เข้าเกมใหม่
+	local queueTp = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+	if queueTp then
+		pcall(queueTp, ('loadstring(game:HttpGet("%s"))()'):format(SCRIPT_URL))
+	end
+
+	local rejoining = false
+	local function rejoin(reason)
+		if rejoining then return end
+		rejoining = true
+		warn("[AutoEgg] กำลัง rejoin:", reason)
+		task.spawn(function()
+			local tries = 0
+			while true do
+				tries += 1
+				pcall(function()
+					if tries <= 2 and game.JobId ~= "" then
+						TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer) -- เซิร์ฟเดิม
+					else
+						TeleportService:Teleport(game.PlaceId, LocalPlayer) -- เซิร์ฟไหนก็ได้
+					end
+				end)
+				task.wait(10)
+			end
+		end)
+	end
+
+	-- 1) ข้อความ error ของ Roblox
+	GuiService.ErrorMessageChanged:Connect(function(msg)
+		if type(msg) == "string" and msg ~= "" then rejoin(msg) end
+	end)
+	-- 2) หน้าต่าง error ขึ้นมา (บางกรณี event ข้อ 1 ไม่ทำงาน)
+	task.spawn(function()
+		pcall(function()
+			local prompt = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 30)
+			local overlay = prompt and prompt:WaitForChild("promptOverlay", 30)
+			if not overlay then return end
+			overlay.ChildAdded:Connect(function(c)
+				if c.Name == "ErrorPrompt" then
+					task.wait(1)
+					rejoin("ErrorPrompt")
+				end
+			end)
 		end)
 	end)
 end
