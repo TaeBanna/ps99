@@ -846,6 +846,7 @@ if oldGui then oldGui:Destroy() end
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AutoEggGUI"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true -- ใช้พิกัดเต็มจอ (คำนวณกันหลุดจอง่ายขึ้น)
 if not pcall(function() ScreenGui.Parent = parentGui end) then
 	ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 end
@@ -1265,32 +1266,110 @@ Close.MouseButton1Click:Connect(function()
 	ScreenGui:Destroy()
 end)
 
--- ลากหน้าต่าง
+------------------------------------------------------------------
+-- ปุ่มลอยเปิด/ปิด GUI + ลากได้แต่ไม่หลุดจอ
+------------------------------------------------------------------
+local ToggleGui = Instance.new("TextButton")
+ToggleGui.Name = "ToggleGui"
+ToggleGui.Size = UDim2.fromOffset(48, 48)
+ToggleGui.Position = UDim2.fromOffset(16, 200)
+ToggleGui.Font = Enum.Font.GothamBold
+ToggleGui.TextSize = 12
+ToggleGui.TextColor3 = Color3.new(1, 1, 1)
+ToggleGui.Text = "EGG"
+ToggleGui.AutoButtonColor = false
+ToggleGui.ZIndex = 10
+ToggleGui.Parent = ScreenGui
+Instance.new("UICorner", ToggleGui).CornerRadius = UDim.new(1, 0)
 do
-	local dragging, dragStart, startPos
-	Frame.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging, dragStart, startPos = true, input.Position, Frame.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then dragging = false end
-			end)
-		end
+	local s = Instance.new("UIStroke", ToggleGui)
+	s.Color = Color3.new(1, 1, 1)
+	s.Thickness = 2
+	s.Transparency = 0.4
+end
+
+-- ตำแหน่งเทียบกับมุมซ้ายบนของจอ
+local function relPos(obj)
+	local p = obj.AbsolutePosition - ScreenGui.AbsolutePosition
+	return p.X, p.Y
+end
+
+-- วางตำแหน่งแบบบีบให้อยู่ในจอเสมอ
+local function placeAt(obj, x, y)
+	local screen = ScreenGui.AbsoluteSize
+	local size = obj.AbsoluteSize
+	if screen.X <= 0 or screen.Y <= 0 then return end
+	x = math.clamp(x, 0, math.max(screen.X - size.X, 0))
+	y = math.clamp(y, 0, math.max(screen.Y - size.Y, 0))
+	obj.Position = UDim2.fromOffset(x, y)
+end
+
+-- ลากได้ (เมาส์/นิ้ว) + กันหลุดจอ + จำตำแหน่ง / ถ้าแตะเฉยๆ ไม่ได้ลาก = onClick
+local function makeDraggable(obj, saveKey, onClick)
+	local dragging, moved, startInput, sx, sy = false, false, nil, 0, 0
+	obj.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		dragging, moved, startInput = true, false, input.Position
+		sx, sy = relPos(obj)
+		local conn
+		conn = input.Changed:Connect(function()
+			if input.UserInputState ~= Enum.UserInputState.End then return end
+			conn:Disconnect()
+			if not dragging then return end
+			dragging = false
+			if moved then
+				local x, y = relPos(obj)
+				config[saveKey] = { x, y }
+				saveConfig()
+			elseif onClick then
+				onClick()
+			end
+		end)
 	end)
 	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch) then
-			local d = input.Position - dragStart
-			Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-		end
+		if not dragging then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		local d = input.Position - startInput
+		if not moved and d.Magnitude < 6 then return end -- ขยับนิดเดียว = ยังนับเป็นการแตะ
+		moved = true
+		placeAt(obj, sx + d.X, sy + d.Y)
 	end)
 end
 
--- RightShift = ซ่อน/แสดง
+local function setGuiVisible(v)
+	Frame.Visible = v
+	ToggleGui.BackgroundColor3 = v and ON or GREY
+	config.guiVisible = v
+	saveConfig()
+	if v then refresh() end
+end
+
+makeDraggable(Frame, "framePos")
+makeDraggable(ToggleGui, "togglePos", function()
+	setGuiVisible(not Frame.Visible)
+end)
+
+-- จอเปลี่ยนขนาด (หมุนจอ / ย่อหน้าต่าง) -> ดึงกลับเข้าจอ
+ScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	placeAt(Frame, relPos(Frame))
+	placeAt(ToggleGui, relPos(ToggleGui))
+end)
+
+-- ตำแหน่ง/สถานะที่จำไว้
+task.defer(function()
+	local fp, tp = config.framePos, config.togglePos
+	if type(fp) == "table" then placeAt(Frame, fp[1], fp[2]) else placeAt(Frame, relPos(Frame)) end
+	if type(tp) == "table" then placeAt(ToggleGui, tp[1], tp[2])
+	else placeAt(ToggleGui, 16, ScreenGui.AbsoluteSize.Y / 2 - 24) end
+	setGuiVisible(config.guiVisible ~= false)
+end)
+
+-- RightShift = ซ่อน/แสดง (คีย์บอร์ด)
 UserInputService.InputBegan:Connect(function(input, gpe)
 	if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
-		Frame.Visible = not Frame.Visible
-		if Frame.Visible then refresh() end
+		setGuiVisible(not Frame.Visible)
 	end
 end)
 
