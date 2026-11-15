@@ -1335,6 +1335,29 @@ task.spawn(function()
 end)
 
 ------------------------------------------------------------------
+-- ANTI-AFK: กันโดนเตะเพราะไม่ขยับ 20 นาที
+--  1) ปิดตัวเตะ AFK ของ Roblox (Idled) ถ้า executor มี getconnections
+--  2) สำรอง: พอ Roblox แจ้งว่าเราว่าง จะจำลองการคลิกขวา 1 ครั้ง
+------------------------------------------------------------------
+if not (getgenv and getgenv().__AutoEggAntiAfk) then
+	if getgenv then getgenv().__AutoEggAntiAfk = true end -- รันซ้ำไม่ต่อซ้อน
+	if getconnections then
+		pcall(function()
+			for _, c in ipairs(getconnections(LocalPlayer.Idled)) do
+				if c.Disable then c:Disable() elseif c.Disconnect then c:Disconnect() end
+			end
+		end)
+	end
+	local VirtualUser = game:GetService("VirtualUser")
+	LocalPlayer.Idled:Connect(function()
+		pcall(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end)
+end
+
+------------------------------------------------------------------
 -- เริ่มต้น
 ------------------------------------------------------------------
 refresh()
