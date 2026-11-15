@@ -1,2402 +1,1357 @@
-task.spawn(function()
-	local CONFIG = {
-		Title = "Anti-AFK",
-		FallbackInterval = 240,
-		StopOnClose = false,
-	}
-
-	repeat task.wait() until game:IsLoaded()
-
-	local Players = game:GetService("Players")
-	local RunService = game:GetService("RunService")
-	local UserInputService = game:GetService("UserInputService")
-	local TweenService = game:GetService("TweenService")
-	local Stats = game:GetService("Stats")
-	local VirtualUser = game:GetService("VirtualUser")
-	local CoreGui = game:GetService("CoreGui")
-
-	repeat task.wait() until Players.LocalPlayer
-	local LocalPlayer = Players.LocalPlayer
-
-	local env = (getgenv and getgenv()) or _G
-
-	if type(env.VyAntiAfk) == "table" and env.VyAntiAfk.Destroy then
-		pcall(env.VyAntiAfk.Destroy)
-	end
-
-	local state = { running = true, pulses = 0 }
-	env.VyAntiAfk = state
-
-	local connections = {}
-	local function track(conn)
-		connections[#connections + 1] = conn
-		return conn
-	end
-
-	local lastPulse = os.clock()
-
-	local function pulse()
-		lastPulse = os.clock()
-		state.pulses = state.pulses + 1
-		pcall(function()
-			VirtualUser:CaptureController()
-			VirtualUser:ClickButton2(Vector2.new(0, 0))
-		end)
-	end
-
-	local function nudge()
-		pcall(function()
-			local vim = game:GetService("VirtualInputManager")
-			vim:SendKeyEvent(true, Enum.KeyCode.F13, false, game)
-			task.wait(0.05)
-			vim:SendKeyEvent(false, Enum.KeyCode.F13, false, game)
-		end)
-	end
-
-	if getconnections then
-		pcall(function()
-			for _, c in ipairs(getconnections(LocalPlayer.Idled)) do
-				if c.Disable then
-					c:Disable()
-				elseif c.Disconnect then
-					c:Disconnect()
-				end
-			end
-		end)
-	end
-
-	track(LocalPlayer.Idled:Connect(function()
-		pulse()
-	end))
-
-	local function getGuiParent()
-		if gethui then
-			local ok, result = pcall(gethui)
-			if ok and result then
-				return result
-			end
-		end
-		return CoreGui
-	end
-
-	local function create(class, props, parent)
-		local inst = Instance.new(class)
-		for k, v in pairs(props) do
-			inst[k] = v
-		end
-		inst.Parent = parent
-		return inst
-	end
-
-	local WHITE = Color3.fromRGB(255, 255, 255)
-	local GREEN = Color3.fromRGB(90, 220, 120)
-
-	local gui = create("ScreenGui", {
-		Name = "VyAntiAfkGui",
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	})
-	pcall(function()
-		if syn and syn.protect_gui then
-			syn.protect_gui(gui)
-		end
-	end)
-	gui.Parent = getGuiParent()
-
-	local main = create("Frame", {
-		Name = "Main",
-		BackgroundColor3 = Color3.fromRGB(30, 30, 30),
-		BorderSizePixel = 0,
-		Position = UDim2.new(0.085, 0, 0.13, 0),
-		Size = UDim2.new(0, 225, 0, 96),
-	}, gui)
-	create("UICorner", { CornerRadius = UDim.new(0, 8) }, main)
-
-	local function makeLabel(props)
-		props.BackgroundTransparency = 1
-		props.Font = props.Font or Enum.Font.SourceSans
-		props.TextColor3 = props.TextColor3 or WHITE
-		props.TextSize = props.TextSize or 14
-		props.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
-		return create("TextLabel", props, main)
-	end
-
-	makeLabel({
-		Name = "Title",
-		Text = CONFIG.Title,
-		Font = Enum.Font.SourceSansBold,
-		Position = UDim2.new(0, 10, 0, 3),
-		Size = UDim2.new(0, 170, 0, 20),
-	})
-
-	local closeBtn = create("TextButton", {
-		Name = "Close",
-		BackgroundTransparency = 1,
-		Font = Enum.Font.SourceSansBold,
-		Text = "X",
-		TextColor3 = WHITE,
-		TextSize = 14,
-		Position = UDim2.new(1, -30, 0, 3),
-		Size = UDim2.new(0, 26, 0, 20),
-	}, main)
-
-	local divider = create("Frame", {
-		Name = "Divider",
-		BackgroundColor3 = WHITE,
-		BorderSizePixel = 0,
-		Position = UDim2.new(0, 6, 0, 25),
-		Size = UDim2.new(1, -12, 0, 2),
-	}, main)
-	create("UICorner", { CornerRadius = UDim.new(0, 50) }, divider)
-
-	local pingLabel = makeLabel({
-		Name = "Ping",
-		Text = "Ping: --",
-		Position = UDim2.new(0, 10, 0, 32),
-		Size = UDim2.new(0, 100, 0, 20),
-	})
-
-	local fpsLabel = makeLabel({
-		Name = "Fps",
-		Text = "FPS: --",
-		Position = UDim2.new(0, 115, 0, 32),
-		Size = UDim2.new(0, 100, 0, 20),
-	})
-
-	local statusLabel = makeLabel({
-		Name = "Status",
-		Text = "Anti-AFK: Active (pulses: 0)",
-		TextColor3 = GREEN,
-		Position = UDim2.new(0, 10, 0, 54),
-		Size = UDim2.new(1, -20, 0, 18),
-	})
-
-	local timerLabel = makeLabel({
-		Name = "Timer",
-		Text = "Uptime: 00:00:00",
-		Position = UDim2.new(0, 10, 0, 72),
-		Size = UDim2.new(1, -20, 0, 18),
-	})
-
-	local dragging, dragInput, dragStart, startPos
-
-	local function updateDrag(input)
-		local delta = input.Position - dragStart
-		local goal = {
-			Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + delta.X,
-				startPos.Y.Scale, startPos.Y.Offset + delta.Y
-			),
-		}
-		TweenService:Create(main, TweenInfo.new(0.04, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), goal):Play()
-	end
-
-	track(main.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = main.Position
-			local c
-			c = input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					c:Disconnect()
-				end
-			end)
-		end
-	end))
-
-	track(main.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
-		end
-	end))
-
-	track(UserInputService.InputChanged:Connect(function(input)
-		if input == dragInput and dragging then
-			updateDrag(input)
-		end
-	end))
-
-	function state.Destroy()
-		state.running = false
-		for _, c in ipairs(connections) do
-			pcall(function() c:Disconnect() end)
-		end
-		connections = {}
-		pcall(function() gui:Destroy() end)
-		if env.VyAntiAfk == state then
-			env.VyAntiAfk = nil
-		end
-	end
-
-	track(closeBtn.MouseButton1Click:Connect(function()
-		if CONFIG.StopOnClose then
-			state.Destroy()
-		else
-			pcall(function() gui:Destroy() end)
-		end
-	end))
-
-	local function getPing()
-		local ok, value = pcall(function()
-			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-		end)
-		if ok and type(value) == "number" then
-			return value
-		end
-		ok, value = pcall(function()
-			return LocalPlayer:GetNetworkPing() * 1000
-		end)
-		if ok and type(value) == "number" then
-			return value
-		end
-		return nil
-	end
-
-	local function formatTime(total)
-		return string.format("%02d:%02d:%02d", math.floor(total / 3600), math.floor(total / 60) % 60, total % 60)
-	end
-
-	local frames = 0
-	local lastFpsTick = os.clock()
-	local startTime = os.time()
-
-	track(RunService.RenderStepped:Connect(function()
-		frames = frames + 1
-	end))
-
-	task.spawn(function()
-		while state.running do
-			task.wait(1)
-			if not state.running then
-				break
-			end
-
-			pcall(function()
-				local now = os.clock()
-				local fps = math.floor(frames / math.max(now - lastFpsTick, 0.001) + 0.5)
-				frames = 0
-				lastFpsTick = now
-
-				if now - lastPulse >= CONFIG.FallbackInterval then
-					pulse()
-					nudge()
-				end
-
-				if gui.Parent then
-					local ping = getPing()
-					pingLabel.Text = ping and ("Ping: " .. math.floor(ping + 0.5) .. " ms") or "Ping: n/a"
-					fpsLabel.Text = "FPS: " .. fps
-					statusLabel.Text = "Anti-AFK: Active (pulses: " .. state.pulses .. ")"
-					timerLabel.Text = "Uptime: " .. formatTime(os.time() - startTime)
-				end
-			end)
-		end
-	end)
-end)
+--// Auto Event + Auto Hatch Custom Egg
+--// - รันแล้ว: เข้า event -> วาร์ปไป GoldenGrove_Zone ใน plot เรา -> เปิด auto farm
+--//   -> หาไข่ใกล้ๆ จุดฟาร์ม -> เปิดจำนวนสูงสุดวนไปเรื่อยๆ
+--// - กันวาร์ปมั่ว: ทุกการวาร์ปต้องผ่าน safeTP() ที่ยอมเฉพาะจุดใกล้โซนฟาร์มของ plot เรา
+--// - FPS BOOST / ปิดภาพ 3D ช่วยให้เกมลื่น
+--// - config บันทึกที่ AutoEgg/config.json
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
-getgenv().LimonOrb = getgenv().LimonOrb or {}
-local C = getgenv().LimonOrb
-C.running = C.running ~= false
-C.verb = C.verb ~= false
-C.breakAll = C.breakAll == true
-C.breakAllDelay = math.max(0.05, tonumber(C.breakAllDelay) or 0.12)
-C.breakAllParent = C.breakAllParent or "HatchWar"
-C.petSpeed = C.petSpeed == true
-C.superMagnet = C.superMagnet == true
-C.efficientFarm = C.efficientFarm == true
-C.autoJoin = C.autoJoin ~= false
-C.whiteScreen = C.whiteScreen == true
-C.fpsCap = math.floor(math.clamp(tonumber(C.fpsCap) or 30, 1, 240))
-C.autoBoss = false
-C.bossClickDelay = math.clamp(tonumber(C.bossClickDelay) or 0.1, 0, 3)
-C.manorHatch = false
-C.manorAmount = math.max(0, math.floor(tonumber(C.manorAmount) or 0))
-C.autoKnock = C.autoKnock == true
-C.autoBuyHouses = C.autoBuyHouses == true
-C.doorsMethod = C.doorsMethod == "Walk" and "Walk" or "Teleport"
+------------------------------------------------------------------
+-- ค่าที่ไม่ต้องตั้งใน GUI (แก้ตรงนี้ถ้าอยากเปลี่ยน)
+------------------------------------------------------------------
+local EVENT_ID = "PumpkinTycoon"        -- ชื่อ event ที่จะเข้า
+local THREADS = 1                       -- ยิงพร้อมกันกี่เธรด
+local HATCH_INTERVAL = 0.4              -- เปิดไข่ทุกกี่วินาที (ค่าตายตัว) ขึ้น "too quickly" บ่อย = เพิ่ม / อยากเร็ว = ลด
+local PROBE_START = 100                 -- ใช้ตอนหาค่าสูงสุดไม่เจอ จะไล่ลดจากเลขนี้
+local SECTION_NAME = "5 | Golden Grove" -- workspace.__THINGS.Plots[x].Sections[...]
+local ZONE_NAME = "GoldenGrove_Zone"    -- Sections[SECTION_NAME].BREAK_ZONES[ZONE_NAME] = จุดฟาร์ม
+local EGG_RADIUS = 40                   -- หาไข่ในระยะเท่านี้จากจุดฟาร์ม
+local TP_SAFE_RADIUS = 150              -- วาร์ปได้เฉพาะจุดที่ห่างจากโซนฟาร์มของเราไม่เกินนี้
+local EDGE_MARGIN = 4                   -- ยืนห่างขอบโซนฟาร์มกี่ studs (ตอนขยับเข้าใกล้ไข่)
 
 local Players = game:GetService("Players")
-local RS = game:GetService("ReplicatedStorage")
-local UIS = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
-local VirtualUser = game:GetService("VirtualUser")
-local GuiService = game:GetService("GuiService")
-local VirtualInputManager = nil
-pcall(function() VirtualInputManager = game:GetService("VirtualInputManager") end)
-local lp = Players.LocalPlayer
+local Lighting = game:GetService("Lighting")
 
-C._runId = (C._runId or 0) + 1
-local MY_RUN = C._runId
-if C._efConns then
-    for _, c in ipairs(C._efConns) do pcall(function() c:Disconnect() end) end
-end
-C._efConns = {}
-local function alive() return MY_RUN == C._runId end
-local function log(...) if C.verb then print("[VY]", ...) end end
-local doorsHoldUntil = 0 -- door teleport / walk window, pauses the Boss / Manor movers
-local function doorsHolding() return os.clock() < doorsHoldUntil end
-local doorsPriorityUntil = 0 -- doors ready to open: Auto Boss / Manor pause until they are done
-local function doorsPriority() return os.clock() < doorsPriorityUntil end
-local doorsWalkTarget = nil -- hoverboard steering target while walking to a door
+local LocalPlayer = Players.LocalPlayer
+local Library = ReplicatedStorage:WaitForChild("Library")
+local HatchRemote = ReplicatedStorage:WaitForChild("Network"):WaitForChild("CustomEggs_Hatch")
 
-C.antiAfk = C.antiAfk ~= false
-if C._afkConn then pcall(function() C._afkConn:Disconnect() end) end
-if C._aaConns then
-    for _, c in ipairs(C._aaConns) do pcall(function() c:Disconnect() end) end
-    C._aaConns = nil
-end
-C._afkConn = lp.Idled:Connect(function()
-    if not C.antiAfk then return end
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
-end)
+local CONFIG_FOLDER = "AutoEgg"
+local CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
 
-local function getZoneRoot()
-    local things = workspace:FindFirstChild("__THINGS")
-    local container = things and things:FindFirstChild("__INSTANCE_CONTAINER")
-    local active = container and container:FindFirstChild("Active")
-    return active and active:FindFirstChild("HatchWar")
+------------------------------------------------------------------
+-- thread identity (require module ของเกมทำให้ identity ตก -> แตะ GUI ไม่ได้)
+------------------------------------------------------------------
+local setIdentity = setthreadidentity or set_thread_identity or setidentity
+	or (syn and syn.set_thread_identity)
+local function fixIdentity()
+	if setIdentity then pcall(setIdentity, 8) end
 end
 
-local function setIdentity(n)
-    local f = setthreadidentity or set_thread_identity or (syn and syn.set_thread_identity)
-    if f then pcall(f, n) end
+local function tryRequire(inst)
+	local ok, mod = pcall(require, inst)
+	fixIdentity()
+	return ok and mod or nil
 end
 
-local function fireNetwork(name)
-    task.spawn(function()
-        pcall(function()
-            local net = RS:WaitForChild("Network", 10)
-            local remote = net and net:WaitForChild(name, 10)
-            if remote then remote:FireServer() end
-        end)
-    end)
+local function requirePath(path)
+	local node = Library
+	for name in string.gmatch(path, "[^%.]+") do
+		node = node and node:WaitForChild(name, 5)
+	end
+	return node and tryRequire(node) or nil
 end
 
-local function clientModule(name, timeout)
-    local lib = RS:WaitForChild("Library", timeout or 10)
-    local client = lib and lib:WaitForChild("Client", timeout or 10)
-    return client and client:WaitForChild(name, timeout or 10)
-end
+local Variables = requirePath("Variables")
+local EggCmds = requirePath("Client.EggCmds")
+local Save = requirePath("Client.Save")
+local InstancingCmds = requirePath("Client.InstancingCmds")
+local AutoFarmCmds = requirePath("Client.AutoFarmCmds")
 
-local PlayerPet = nil
-pcall(function() PlayerPet = require(RS.Library.Client.PlayerPet) end)
-
-local SPEED_HOOK_VERSION = 2
-
-local function installPetSpeed()
-    if C._speedHookVersion == SPEED_HOOK_VERSION then return true end
-    if not hookfunction or not PlayerPet or type(PlayerPet.CalculateSpeedMultiplier) ~= "function" then
-        return false
-    end
-    local orig
-    local ok = pcall(function()
-        orig = hookfunction(PlayerPet.CalculateSpeedMultiplier, function(...)
-            if C.petSpeed then return math.huge end
-            if C.efficientFarm then return 500 end
-            return orig(...)
-        end)
-    end)
-    if ok and orig ~= nil then C._speedHookVersion = SPEED_HOOK_VERSION end
-    return C._speedHookVersion == SPEED_HOOK_VERSION
-end
-
-local magnetConfigBackup = setmetatable({}, { __mode = "k" })
-
-local function applyMagnetConfig(r)
-    if C.superMagnet then
-        r.config = r.config or {}
-        if magnetConfigBackup[r.config] == nil then
-            magnetConfigBackup[r.config] = { orig = r.config.SuperMagnet }
-        end
-        r.config.SuperMagnet = true
-    elseif type(r.config) == "table" and magnetConfigBackup[r.config] then
-        r.config.SuperMagnet = magnetConfigBackup[r.config].orig
-        magnetConfigBackup[r.config] = nil
-    end
-end
-
-local function installMagnet()
-    if C._magnetPatched then return true end
-    local applied = 0
-
-    local function patch(name, fn)
-        local m = clientModule(name, 10)
-        if not m then return end
-        local ok, mod = pcall(require, m)
-        if not ok or type(mod) ~= "table" then return end
-        pcall(function() if setreadonly then setreadonly(mod, false) end end)
-        if pcall(fn, mod) then applied += 1 end
-    end
-
-    patch("EnchantCmds", function(e)
-        local o = e.GetPower
-        e.GetPower = function(...)
-            local p = ...
-            if C.superMagnet and (p == "Super Magnet" or p == "Magnet") then return 999 end
-            return o(...)
-        end
-    end)
-
-    patch("UpgradeCmds", function(u)
-        local o = u.GetPower
-        u.GetPower = function(...)
-            if C.superMagnet and (...) == "Magnet" then return 999 end
-            return o(...)
-        end
-    end)
-
-    patch("InstancingCmds", function(i)
-        local g = i.Get
-        if type(g) ~= "function" then error("no Get") end
-        i.Get = function(...)
-            local r = g(...)
-            if type(r) == "table" then pcall(applyMagnetConfig, r) end
-            return r
-        end
-    end)
-
-    C._magnetPatched = applied > 0
-    return C._magnetPatched
-end
-
-local breakJoinRemote = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Breakables_JoinPetBulk")
-local breakAssign = {}
-
-local function eventBreakableUIDs()
-    local out = {}
-    local things = workspace:FindFirstChild("__THINGS")
-    local br = things and things:FindFirstChild("Breakables")
-    if not br then return out end
-    for _, m in ipairs(br:GetChildren()) do
-        if m:IsA("Model") and m:GetAttribute("ParentID") == C.breakAllParent then
-            local uid = m:GetAttribute("BreakableUID")
-            if uid then out[#out + 1] = uid end
-        end
-    end
-    return out
-end
-
-local function equippedPetEuids()
-    local out = {}
-    if not PlayerPet then return out end
-    for _, p in pairs(PlayerPet.GetAll()) do
-        if p and p.euid then out[#out + 1] = p.euid end
-    end
-    return out
-end
-
-local function breakAllTick()
-    if not (C.breakAll and breakJoinRemote) then return end
-    local pets = equippedPetEuids()
-    if #pets == 0 then return end
-    local list = eventBreakableUIDs()
-    if #list == 0 then return end
-    local live = {}
-    for _, uid in ipairs(list) do live[uid] = true end
-    local used = {}
-    for e, uid in pairs(breakAssign) do
-        if live[uid] then used[uid] = true else breakAssign[e] = nil end
-    end
-    local free = {}
-    for _, uid in ipairs(list) do
-        if not used[uid] then free[#free + 1] = uid end
-    end
-    local map = {}
-    for _, e in ipairs(pets) do
-        if not breakAssign[e] and #free > 0 then breakAssign[e] = table.remove(free) end
-        if breakAssign[e] and live[breakAssign[e]] then map[e] = breakAssign[e] end
-    end
-    if next(map) then
-        pcall(function() breakJoinRemote:FireServer(map) end)
-    end
-end
-
-task.spawn(function()
-    while alive() do
-        if C.running and C.breakAll then
-            pcall(breakAllTick)
-            task.wait(math.max(0.05, tonumber(C.breakAllDelay) or 0.12))
-        else
-            task.wait(0.2)
-        end
-    end
-end)
-
-local efReady = false
-local efNetwork, efMapCmds
-
-local function efNearbyBreakables()
-    local out = {}
-    local character = lp.Character
-    local hrp = character and character:FindFirstChild("HumanoidRootPart")
-    local things = workspace:FindFirstChild("__THINGS")
-    local folder = things and things:FindFirstChild("Breakables")
-    if not (hrp and folder) then return out end
-
-    local zone = efMapCmds.GetCurrentZone()
-    for _, b in ipairs(folder:GetChildren()) do
-        local parentID = b:GetAttribute("ParentID")
-        if parentID == "TimeTrial" or parentID == zone then
-            local uid = b:GetAttribute("BreakableUID")
-            local part = b:FindFirstChildWhichIsA("BasePart", true)
-            if uid and part and (part.Position - hrp.Position).Magnitude <= 1500 then
-                out[#out + 1] = uid
-            end
-        end
-    end
-    return out
-end
-
-local function efficientFarmTick()
-    local pets = equippedPetEuids()
-    local list = efNearbyBreakables()
-    local breakableCount = #list
-    if #pets == 0 or breakableCount == 0 then return end
-
-    local map = {}
-    for i, euid in ipairs(pets) do
-        map[euid] = list[(i - 1) % breakableCount + 1]
-    end
-
-    if efNetwork.UnreliableFire then
-        pcall(efNetwork.UnreliableFire, "Breakables_PlayerDealDamage", list[1])
-    end
-    pcall(efNetwork.Fire, "Breakables_JoinPetBulk", map)
-end
-
-local function efConnectLoot(folderName, eventName)
-    task.spawn(function()
-        local things = workspace:WaitForChild("__THINGS", 10)
-        local folder = things and things:WaitForChild(folderName, 10)
-        if not folder or not alive() then return end
-        local conn = folder.ChildAdded:Connect(function(item)
-            if not (C.running and C.efficientFarm) then return end
-            pcall(function()
-                efNetwork.Fire(eventName, { item.Name })
-                item:Destroy()
-            end)
-        end)
-        table.insert(C._efConns, conn)
-    end)
-end
-
-local function installEfficientFarm()
-    if efReady then return true end
-
-    local t = os.clock()
-    while not lp:GetAttribute("__LOADED") and os.clock() - t < 15 do task.wait() end
-
-    local okN, N = pcall(function() return require(clientModule("Network", 10)) end)
-    local okM, M = pcall(function() return require(clientModule("MapCmds", 10)) end)
-    if not (okN and okM and type(N) == "table" and type(M) == "table"
-        and type(N.Fire) == "function" and type(M.GetCurrentZone) == "function") then
-        return false
-    end
-
-    efNetwork, efMapCmds = N, M
-    efReady = true
-    efConnectLoot("Lootbags", "Lootbags_Claim")
-    efConnectLoot("Orbs", "Orbs: Collect")
-    return true
-end
-
-task.spawn(function()
-    while alive() do
-        if C.running and C.efficientFarm and efReady then
-            pcall(efficientFarmTick)
-            task.wait(0.05)
-        else
-            task.wait(0.2)
-        end
-    end
-end)
-
-local getIdentityFn = getthreadidentity or get_thread_identity or getidentity or (syn and syn.get_thread_identity)
-local BASE_IDENTITY = 7
-if getIdentityFn then
-    local okId, id = pcall(getIdentityFn)
-    if okId and type(id) == "number" and id >= 3 then BASE_IDENTITY = id end
-end
-local function restoreIdentity()
-    setIdentity(BASE_IDENTITY)
-end
-
-local hoverboardCmds = nil
-local function getHoverboardCmds()
-    if hoverboardCmds then return hoverboardCmds end
-    local ok, mod = pcall(function() return require(RS.Library.Client.HoverboardCmds) end)
-    if ok and type(mod) == "table" then hoverboardCmds = mod end
-    return hoverboardCmds
-end
-
-local function hoverboardOn()
-    if lp:GetAttribute("UsingHoverboard") == true then return true end
-    local cmds = getHoverboardCmds()
-    if cmds and type(cmds.IsEquipped) == "function" then
-        local ok, equipped = pcall(cmds.IsEquipped)
-        if ok and equipped then return true end
-    end
-    return false
-end
-
-local hoverboardHooked = false
-local function installHoverboardSteering()
-    if hoverboardHooked then
-        local cls = C._hbClass
-        local okC, current = pcall(function() return cls and cls.ComputeMoveDirection end)
-        if okC and current ~= nil and current == C._hbHook then return true end
-        hoverboardHooked = false
-    end
-
-    local class
-    local playerScripts = lp:FindFirstChild("PlayerScripts")
-    if playerScripts then
-        for _, d in ipairs(playerScripts:GetDescendants()) do
-            if d:IsA("ModuleScript") and d.Name == "HoverboardInstance" then
-                local ok, mod = pcall(require, d)
-                if ok and type(mod) == "table" and type(mod.ComputeMoveDirection) == "function" then
-                    class = mod
-                    break
-                end
-            end
-        end
-    end
-    if not class then return false end
-
-    if C._hbClass ~= class or type(C._hbOriginal) ~= "function" then
-        C._hbClass = class
-        C._hbOriginal = class.ComputeMoveDirection
-    end
-    local original = C._hbOriginal
-
-    pcall(function() if setreadonly then setreadonly(class, false) end end)
-    local hook = function(self, ...)
-        if self._isLocal and doorsHolding() then
-            local walkTo = doorsWalkTarget
-            local hbRoot = self._humanoidRootPart
-            if walkTo and hbRoot then
-                local flatWalk = Vector3.new(walkTo.X - hbRoot.Position.X, 0, walkTo.Z - hbRoot.Position.Z)
-                local dist = flatWalk.Magnitude
-                if dist > 2 then return flatWalk.Unit * math.clamp(dist / 8, 0.35, 1) end
-            end
-            return Vector3.zero
-        end
-        return original(self, ...)
-    end
-    local okSet = pcall(function() class.ComputeMoveDirection = hook end)
-    if not okSet then return false end
-
-    C._hbHook = hook
-    hoverboardHooked = true
-    return true
-end
-
-local startBoss, stopBoss
-local bossLabel
-local trickActiveUntil = 0
-local function trickTapping() return os.clock() < trickActiveUntil end
-local trickWaitUntil, trickSeenFight = 0, false
-local bossScanCircles
-
+-- module ที่เกี่ยวกับ custom egg (ชื่อมีคำว่า CustomEgg)
+local CustomEggModules = {}
 do
-    local BOSS_ZONE = 6
-    local BOSS_PATH = { "INTERACT", "Bosses", "Boss" .. BOSS_ZONE, "BossRig" }
-    local BOSS_OFFSET = Vector3.new(0, 3, 0)
-    local BOSS_FALLBACK = Vector3.new(7626.6, 16, 21980.4)
-    local TELEPORT_EVERY = 2
-    local START_EVERY = 2
-    local FIGHT_IDLE = 6
-    local START_GRACE = 8
-    local CIRCLE_WAIT = 10
-    local FIGHT_MAX = 90
-    local PRESS_E_EVERY = 5
-
-    local CIRCLE_NAME = "LiveCircle"
-    local METHOD = "auto"
-    local CLICK_JITTER = 0.02
-    local RETRY_AFTER = 0.15
-    local MAX_TRIES = 6
-    local MAX_TAPS_PER_SEC = 8
-    local CLICK_OFFSET_X, CLICK_OFFSET_Y = 0, 0
-
-    local circles = {}
-    local lastCircleAt = -math.huge
-    local stats = { hit = 0, lost = 0, taps = 0 }
-    local wins = { click = 0, signal = 0 }
-    local HAS_SIGNAL = type(firesignal) == "function" or type(getconnections) == "function"
-    local bossState = "idle"
-
-    local function clickDelay()
-        local d = math.clamp(tonumber(C.bossClickDelay) or 0.1, 0, 3)
-        return d + math.random() * CLICK_JITTER
-    end
-
-    local function setBossState(text)
-        if text ~= bossState then
-            bossState = text
-            log("Boss:", text)
-        end
-    end
-
-    local HatchWarBoss = nil
-    local function loadBossModule()
-        if HatchWarBoss then return end
-        pcall(function()
-            local node = RS
-            for _, name in ipairs({ "Library", "Util", "HatchWarBoss" }) do
-                node = node and node:FindFirstChild(name)
-            end
-            if node then HatchWarBoss = require(node) end
-        end)
-    end
-    loadBossModule()
-
-    local function tapInterval()
-        local rate = MAX_TAPS_PER_SEC
-        if HatchWarBoss and type(HatchWarBoss.ClicksPerSecondCap) == "function" then
-            local ok, cap = pcall(HatchWarBoss.ClicksPerSecondCap)
-            if ok and type(cap) == "number" and cap > 0 then
-                rate = math.min(rate, cap * 0.8)
-            end
-        end
-        local delay = math.clamp(tonumber(C.bossClickDelay) or 0.1, 0, 3)
-        return math.max(1 / math.max(rate, 1), delay)
-    end
-
-    local function track(obj)
-        if circles[obj] or not obj:IsA("GuiButton") then return end
-        local now = os.clock()
-        lastCircleAt = now
-        circles[obj] = {
-            born = now,
-            ready = now + clickDelay(),
-            last = -math.huge,
-            tries = 0,
-        }
-    end
-
-    local function scanCircles()
-        local playerGui = lp:FindFirstChild("PlayerGui")
-        if not playerGui then return end
-        for _, d in ipairs(playerGui:GetDescendants()) do
-            if d.Name == CIRCLE_NAME then track(d) end
-        end
-    end
-    bossScanCircles = scanCircles
-
-    local function circlesWanted()
-        return C.autoBoss or C.autoKnock or trickTapping()
-    end
-
-    local playerGui = lp:FindFirstChild("PlayerGui")
-    if playerGui then
-        table.insert(C._efConns, playerGui.DescendantAdded:Connect(function(d)
-            if circlesWanted() and d.Name == CIRCLE_NAME then track(d) end
-        end))
-    end
-
-    local function guiInset(gui)
-        local screen = gui:FindFirstAncestorWhichIsA("ScreenGui")
-        if screen then
-            if screen.IgnoreGuiInset then return 0, 0 end
-            local ok, noInset = pcall(function()
-                local mode = screen.ScreenInsets
-                return mode == Enum.ScreenInsets.None or mode == Enum.ScreenInsets.DeviceSafeInsets
-            end)
-            if ok and noInset then return 0, 0 end
-        end
-        local inset = GuiService:GetGuiInset()
-        return inset.X, inset.Y
-    end
-
-    local function clickPoint(btn)
-        local size = btn.AbsoluteSize
-        if size.X <= 0 or size.Y <= 0 then return nil end
-        local pos = btn.AbsolutePosition
-        local ix, iy = guiInset(btn)
-        local x = math.floor(pos.X + size.X * 0.5 + ix + CLICK_OFFSET_X + 0.5)
-        local y = math.floor(pos.Y + size.Y * 0.5 + iy + CLICK_OFFSET_Y + 0.5)
-        local cam = workspace.CurrentCamera
-        if cam then
-            local vp = cam.ViewportSize
-            if x < 0 or y < 0 or x > vp.X or y > vp.Y then return nil end
-        end
-        return x, y
-    end
-
-    local function tapClick(btn)
-        if not VirtualInputManager then return false end
-        local x, y = clickPoint(btn)
-        if not x then return false end
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
-        task.wait()
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
-        return true
-    end
-
-    local function fireSignal(signal, ...)
-        if type(firesignal) == "function" then
-            return (pcall(firesignal, signal, ...))
-        end
-        if type(getconnections) == "function" then
-            local args = { ... }
-            local ok, conns = pcall(getconnections, signal)
-            if ok and type(conns) == "table" then
-                for _, c in ipairs(conns) do
-                    pcall(function() c:Fire(table.unpack(args)) end)
-                end
-                return true
-            end
-        end
-        return false
-    end
-
-    local function tapSignal(btn)
-        if not HAS_SIGNAL then return false end
-        local p = btn.AbsolutePosition
-        local input = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.Begin,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = Vector3.new(p.X, p.Y, 0),
-        }
-        local a = fireSignal(btn.InputBegan, input)
-        local b = fireSignal(btn.Activated, input, 1)
-        local c = fireSignal(btn.MouseButton1Click)
-        return a or b or c
-    end
-
-    local function primaryMethod()
-        if METHOD == "click" then return "click" end
-        if METHOD == "signal" then return HAS_SIGNAL and "signal" or "click" end
-        if HAS_SIGNAL and wins.signal >= wins.click + 2 then return "signal" end
-        return "click"
-    end
-
-    local function methodFor(info)
-        local first = primaryMethod()
-        if info.tries % 2 == 0 then return first end
-        if METHOD == "auto" and HAS_SIGNAL then
-            return first == "click" and "signal" or "click"
-        end
-        return first
-    end
-
-    local function tappable(btn)
-        if not btn.Visible then return false end
-        local screen = btn:FindFirstAncestorWhichIsA("ScreenGui")
-        if screen and not screen.Enabled then return false end
-        local size = btn.AbsoluteSize
-        return size.X > 0 and size.Y > 0
-    end
-
-    local function tapCircle(btn, info)
-        local method = methodFor(info)
-        info.tries += 1
-        info.last = os.clock()
-        stats.taps += 1
-
-        local sent
-        if method == "signal" then
-            sent = tapSignal(btn)
-        else
-            sent = tapClick(btn)
-            if not sent and METHOD == "auto" and HAS_SIGNAL then
-                method = "signal"
-                sent = tapSignal(btn)
-            end
-        end
-        info.method = method
-    end
-
-    local function pressE()
-        if not VirtualInputManager then return end
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-        end)
-    end
-
-    local function bossPivot()
-        local node = getZoneRoot()
-        for _, name in ipairs(BOSS_PATH) do
-            node = node and node:FindFirstChild(name)
-        end
-        if not node then return nil end
-        local ok, cf = pcall(function() return node:GetPivot() end)
-        if ok and typeof(cf) == "CFrame" then return cf end
-        return nil
-    end
-
-    local function teleportToBoss(root)
-        if not getZoneRoot() then return nil, false end
-
-        local pivot = bossPivot()
-        local destination = pivot and (pivot.Position + BOSS_OFFSET) or BOSS_FALLBACK
-        local rotation = root.CFrame - root.CFrame.Position
-
-        root.CFrame = CFrame.new(destination) * rotation
-        pcall(function()
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-        return destination, pivot ~= nil
-    end
-
-    task.spawn(function()
-        local lastTap = -math.huge
-        while alive() do
-            if not (C.running and circlesWanted()) then
-                task.wait(0.2)
-            else
-                task.wait()
-                local ok, err = pcall(function()
-                    local now = os.clock()
-                    local best, bestInfo
-                    for btn, info in pairs(circles) do
-                        if btn.Name ~= CIRCLE_NAME then
-                            stats.hit += 1
-                            if info.method then wins[info.method] += 1 end
-                            circles[btn] = nil
-                        elseif btn.Parent == nil then
-                            stats.lost += 1
-                            circles[btn] = nil
-                        elseif info.tries < MAX_TRIES and info.ready <= now
-                            and now - info.last >= RETRY_AFTER and tappable(btn) then
-                            if not best or info.born < bestInfo.born then best, bestInfo = btn, info end
-                        end
-                    end
-
-                    if best and not GuiService.MenuIsOpen and now - lastTap >= tapInterval() then
-                        lastTap = now
-                        tapCircle(best, bestInfo)
-                    end
-                end)
-                if not ok then log("Boss tap error:", err) end
-            end
-        end
-    end)
-
-    local StartRemote = nil
-    local function getStartRemote()
-        if StartRemote and StartRemote.Parent then return StartRemote end
-        local net = RS:FindFirstChild("Network")
-        StartRemote = net and net:FindFirstChild("Instancing_InvokeCustomFromClient")
-        return StartRemote
-    end
-
-    local starting, startedAt, graceUntil, remoteAt = false, 0, 0, nil
-    local useRemote, remoteConfirmed, lastReason = true, false, nil
-
-    local function fightActive(now)
-        return (starting and now - startedAt < FIGHT_MAX)
-            or now < graceUntil
-            or now - lastCircleAt < FIGHT_IDLE
-    end
-
-    local function startFight()
-        local now = os.clock()
-        if starting and now - startedAt >= FIGHT_MAX then starting = false end
-        if useRemote then
-            local remote = getStartRemote()
-            if remote then
-                if starting then return end
-                starting, startedAt = true, now
-                task.spawn(function()
-                    local ok, a, b = pcall(function()
-                        return remote:InvokeServer("HatchWar", "HW_Boss_Start", BOSS_ZONE)
-                    end)
-                    starting = false
-                    if ok and a then
-                        graceUntil, remoteAt, lastReason = os.clock() + START_GRACE, os.clock(), nil
-                        log("Boss: fight started (remote)")
-                    else
-                        local why = tostring(ok and b or a)
-                        if why ~= lastReason then
-                            lastReason = why
-                            log("Boss: start refused -", why)
-                        end
-                    end
-                end)
-                return
-            end
-        end
-        graceUntil = now + PRESS_E_EVERY
-        pressE()
-    end
-
-    task.spawn(function()
-        local lastTeleport, lastStart, wasOn = -math.huge, -math.huge, false
-
-        while alive() do
-            task.wait(0.1)
-
-            if not (C.running and C.autoBoss) then
-                if wasOn then
-                    wasOn = false
-                    setBossState("idle")
-                end
-                task.wait(0.3)
-            else
-                if not wasOn then
-                    wasOn = true
-                    lastTeleport, lastStart, graceUntil = -math.huge, -math.huge, 0
-                    useRemote, remoteConfirmed, remoteAt, lastReason = true, false, nil, nil
-                end
-
-                local ok, err = pcall(function()
-                    local char = lp.Character
-                    local hum = char and char:FindFirstChildOfClass("Humanoid")
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    if not (hum and root and hum.Health > 0) then
-                        task.wait(0.5)
-                        return
-                    end
-                    if not getZoneRoot() then
-                        setBossState("waiting for HatchWar")
-                        task.wait(0.5)
-                        return
-                    end
-
-                    local now = os.clock()
-
-                    if doorsPriority() then
-                        setBossState(fightActive(now) and "fighting (doors next)" or "paused - opening doors")
-                        return
-                    end
-
-                    if now - lastTeleport >= TELEPORT_EVERY and not doorsHolding() then
-                        lastTeleport = now
-                        teleportToBoss(root)
-                    end
-
-                    if useRemote and remoteAt and not remoteConfirmed then
-                        if lastCircleAt >= startedAt then
-                            remoteConfirmed = true
-                        elseif now - remoteAt > CIRCLE_WAIT and not starting then
-                            useRemote = false
-                            log("Boss: remote started a fight but no circles showed - starting with E instead")
-                        end
-                    end
-
-                    if fightActive(now) then
-                        setBossState("fighting")
-                    elseif now - lastStart >= START_EVERY and not doorsHolding() then
-                        lastStart = now
-                        setBossState("starting fight")
-                        if not GuiService.MenuIsOpen then startFight() end
-                    end
-                end)
-                if not ok then log("Boss loop error:", err) end
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while alive() do
-            if bossLabel then
-                if C.autoBoss then
-                    bossLabel.Text = ("Boss: %s | hit %d | lost %d | taps %d"):format(bossState, stats.hit, stats.lost, stats.taps)
-                elseif (C.autoKnock or trickTapping()) and os.clock() - lastCircleAt < FIGHT_IDLE then
-                    bossLabel.Text = ("Boss: tapping door fight circles | hit %d | taps %d"):format(stats.hit, stats.taps)
-                else
-                    bossLabel.Text = "Boss: idle"
-                end
-            end
-            task.wait(0.5)
-        end
-    end)
-
-    startBoss = function()
-        loadBossModule()
-        table.clear(circles)
-        scanCircles()
-        setBossState("starting")
-    end
-
-    stopBoss = function()
-        table.clear(circles)
-        if C.autoKnock or trickTapping() then scanCircles() end
-    end
+	local client = Library:FindFirstChild("Client")
+	if client then
+		for _, m in ipairs(client:GetChildren()) do
+			if m:IsA("ModuleScript") and string.find(string.lower(m.Name), "customegg") then
+				local mod = tryRequire(m)
+				if type(mod) == "table" then
+					table.insert(CustomEggModules, { name = m.Name, mod = mod })
+				end
+			end
+		end
+	end
 end
 
-local MANOR = {
-    EggId = "Manor Egg",
-    EggModule = "6 | Manor Egg",
-    TeleportTo = Vector3.new(7538.07666015625, 16.2394962310791, 21966.4765625),
-    MaxDistance = 35,
-    CloseDistance = 10,
-    TeleportEvery = 2,
-    Delay = 0.15,
-    DisableAnimations = true,
-    HideEggModel = true,
+-- รอเซฟโหลด
+if Save and Save.Get then
+	local t = 0
+	while t < 30 do
+		local ok, data = pcall(Save.Get)
+		if ok and data then break end
+		t += task.wait(0.5)
+	end
+end
+fixIdentity()
+
+------------------------------------------------------------------
+-- config
+------------------------------------------------------------------
+local hasFS = (writefile and readfile and isfile) ~= nil
+
+local config = {
+	eggName = nil,
+	skipAnim = true,
+	autoJoin = true,
+	autoFarm = true,
+	fpsBoost = true,
+	no3d = false,
+	running = false,
+	probedMax = nil,
 }
 
-local manorLabel
-local manorRemote, manorDir, manorCmds
-local manorHatched = 0
-C._manorHidden = C._manorHidden or {}
-if type(C._witchHidden) == "table" then
-    for model, saved in pairs(C._witchHidden) do C._manorHidden[model] = saved end
-    C._witchHidden = nil
-end
-if C._eggAnimOrig == nil and C._witchOrigAnim ~= nil then
-    C._eggAnimOrig = C._witchOrigAnim
-    C._witchOrigAnim = nil
-end
-
-local function withIdentity(level, fn, ...)
-    setIdentity(level)
-    local results = table.pack(pcall(fn, ...))
-    restoreIdentity()
-    return table.unpack(results, 1, results.n)
+local function loadConfig()
+	if not hasFS then return end
+	local ok, data = pcall(function()
+		if isfile(CONFIG_FILE) then
+			return HttpService:JSONDecode(readfile(CONFIG_FILE))
+		end
+	end)
+	if ok and type(data) == "table" then
+		for k, v in pairs(data) do config[k] = v end
+	end
 end
 
-local function fmtNum(n)
-    n = tonumber(n)
-    if not n then return "?" end
-    local abs = math.abs(n)
-    if abs >= 1e12 then return ("%.2fT"):format(n / 1e12) end
-    if abs >= 1e9 then return ("%.2fB"):format(n / 1e9) end
-    if abs >= 1e6 then return ("%.2fM"):format(n / 1e6) end
-    if abs >= 1e3 then return ("%.1fK"):format(n / 1e3) end
-    return tostring(math.floor(n))
+local function saveConfig()
+	if not hasFS then return end
+	pcall(function()
+		if makefolder and isfolder and not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+		writefile(CONFIG_FILE, HttpService:JSONEncode(config))
+	end)
 end
 
-local function manorSetStatus(text)
-    if manorLabel then pcall(function() manorLabel.Text = text end) end
+loadConfig()
+
+------------------------------------------------------------------
+-- state
+------------------------------------------------------------------
+local state = {
+	running = false,
+	amount = nil,
+	source = "unknown",
+	hatched = 0,
+	session = 0,
+	lastErr = nil,
+	egg = nil,          -- { uid, name, position }
+	info = nil,
+	fails = 0,
+	interval = HATCH_INTERVAL, -- เว้นระยะระหว่างการเปิดแต่ละครั้ง (ค่าตายตัว)
+	lastOkAt = 0,
+	okCount = 0,
+	quickCount = 0,
+	startedAt = os.clock(),
+	busyPrep = false,
+	-- base ของเรา
+	plot = nil, plotSure = false, plotOverride = nil,
+	anchor = nil,       -- กลางโซนฟาร์ม
+	stand = nil,        -- จุดยืน (ใกล้ไข่ในโซน)
+	eggHint = nil,      -- ตำแหน่งไข่จาก attribute ของ plot
+}
+local refresh = function() end
+
+------------------------------------------------------------------
+-- utils
+------------------------------------------------------------------
+local function isUid(s)
+	return type(s) == "string" and #s == 32 and string.match(s, "^%x+$") ~= nil
 end
 
-local function manorSetAnimations(disable)
-    task.spawn(function()
-        local ok, err = pcall(function()
-            if type(getsenv) ~= "function" then error("getsenv not supported by this executor") end
-            local scriptObj = lp:WaitForChild("PlayerScripts", 10)
-                :WaitForChild("Scripts", 10)
-                :WaitForChild("Game", 10)
-                :WaitForChild("Egg Opening Frontend", 10)
-            local senv = getsenv(scriptObj)
-            if type(senv.PlayEggAnimation) ~= "function" then
-                error("PlayEggAnimation not found in script environment")
-            end
-            if disable then
-                if C._eggAnimOrig == nil then C._eggAnimOrig = senv.PlayEggAnimation end
-                senv.PlayEggAnimation = function() return end
-            elseif C._eggAnimOrig ~= nil then
-                senv.PlayEggAnimation = C._eggAnimOrig
-                C._eggAnimOrig = nil
-            end
-        end)
-        if ok then
-            log("Manor: egg + pet hatch animations " .. (disable and "disabled" or "restored"))
-        else
-            log("Manor: could not change animations:", err)
-        end
-    end)
+local function posOf(v)
+	if typeof(v) == "Vector3" then return v end
+	if typeof(v) == "CFrame" then return v.Position end
+	if typeof(v) == "Instance" then
+		local ok, p = pcall(function() return v:GetPivot().Position end)
+		if ok then return p end
+	end
+	return nil
 end
 
-local function manorEggCmds()
-    if manorCmds then return manorCmds end
-    local ok, mod = withIdentity(2, function()
-        local m = clientModule("CustomEggsCmds", 10)
-        return m and require(m)
-    end)
-    if ok and type(mod) == "table" and type(mod.All) == "function" then manorCmds = mod end
-    return manorCmds
+local function myPos()
+	local c = LocalPlayer.Character
+	return c and posOf(c) or nil
 end
 
-local function manorEggDir(egg)
-    if egg and type(egg._dir) == "table" then return egg._dir end
-    if manorDir then return manorDir end
-    local ok, dir = withIdentity(2, function() return require(RS.Library.Directory).Eggs[MANOR.EggId] end)
-    if ok and type(dir) == "table" then manorDir = dir end
-    return manorDir
+local function anchorPos(inst)
+	if not inst then return nil end
+	if inst:IsA("Model") then
+		local ok, cf = pcall(inst.GetPivot, inst)
+		if ok then return cf.Position end
+	end
+	if inst:IsA("BasePart") then return inst.Position end
+	for _, d in ipairs(inst:GetDescendants()) do
+		if d:IsA("BasePart") then return d.Position end
+	end
+	return nil
 end
 
-local function manorFindEgg()
-    local cmds = manorEggCmds()
-    if not cmds then return nil, "module" end
-    local okAll, all = pcall(cmds.All)
-    if not (okAll and type(all) == "table") then return nil, "module" end
-
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local here = root and root.Position or MANOR.TeleportTo
-    local best, bestDist, locked, hidden = nil, nil, 0, 0
-    for _, egg in pairs(all) do
-        if type(egg) == "table" and egg._id == MANOR.EggId and not egg._destroyed then
-            if egg._renderable == false then
-                hidden += 1
-            elseif egg._hatchable == false then
-                locked += 1
-            else
-                local pos = typeof(egg._position) == "Vector3" and egg._position or nil
-                if not pos and typeof(egg._model) == "Instance" and egg._model.Parent then
-                    pos = egg._model:GetPivot().Position
-                end
-                local dist = pos and (pos - here).Magnitude or math.huge
-                if not best or dist < bestDist then best, bestDist = egg, dist end
-            end
-        end
-    end
-    if best then return best, bestDist end
-    return nil, (locked > 0 and "locked") or (hidden > 0 and "hidden") or "missing"
+------------------------------------------------------------------
+-- หาไข่
+------------------------------------------------------------------
+local function readEggTable(key, v)
+	if type(v) ~= "table" then return nil end
+	local uid = (isUid(key) and key) or v._uid or v.uid or v.UID or v.Uid or (isUid(v._id) and v._id) or nil
+	if not isUid(uid) then return nil end
+	local name
+	for _, f in ipairs({ "_id", "id", "eggId", "EggId", "_eggId", "name", "Name", "_name" }) do
+		local n = v[f]
+		if type(n) == "string" and not isUid(n) then name = n break end
+	end
+	if not name and type(v._dir) == "table" then
+		name = v._dir.name or v._dir.Name or v._dir._id
+	end
+	local pos
+	for _, f in ipairs({ "_position", "position", "Position", "_cframe", "cframe", "CFrame", "_pos", "_model", "model", "Model" }) do
+		pos = posOf(v[f])
+		if pos then break end
+	end
+	return { uid = uid, name = name, position = pos }
 end
 
-local function manorPrice(egg)
-    local dir = manorEggDir(egg)
-    if dir then
-        local ignoreCharged = not (egg and egg._allowChargedAndGolden == true)
-        local ok, price = withIdentity(2, function()
-            return require(RS.Library.Balancing.CalcEggPricePlayer)(dir, nil, ignoreCharged)
-        end)
-        if ok and type(price) == "number" and price > 0 then return price end
-        ok, price = withIdentity(2, function() return require(RS.Library.Balancing.CalcEggPrice)(dir) end)
-        if ok and type(price) == "number" and price > 0 then return price end
-        if type(dir.overrideCost) == "number" and dir.overrideCost > 0 then return dir.overrideCost end
-    end
-    return 4802000
+local function scanEggs()
+	local found, seen = {}, {}
+	local function add(e)
+		if not e then return end
+		local o = seen[e.uid]
+		if not o then
+			seen[e.uid] = e
+			table.insert(found, e)
+		else
+			o.name = o.name or e.name
+			o.position = o.position or e.position
+		end
+	end
+
+	for _, entry in ipairs(CustomEggModules) do
+		for _, fname in ipairs({ "All", "GetAll", "GetEggs", "GetAllEggs" }) do
+			local f = entry.mod[fname]
+			if type(f) == "function" then
+				local ok, list = pcall(f)
+				if ok and type(list) == "table" then
+					for k, v in pairs(list) do add(readEggTable(k, v)) end
+				end
+			end
+		end
+	end
+	fixIdentity()
+
+	local things = workspace:FindFirstChild("__THINGS")
+	if things then
+		for _, folderName in ipairs({ "CustomEggs", "Eggs" }) do
+			local folder = things:FindFirstChild(folderName)
+			if folder then
+				for _, m in ipairs(folder:GetChildren()) do
+					local uid = isUid(m.Name) and m.Name or m:GetAttribute("UID") or m:GetAttribute("Uid") or m:GetAttribute("uid")
+					if isUid(uid) then
+						local name = m:GetAttribute("EggId") or m:GetAttribute("Id") or m:GetAttribute("Name")
+						add({ uid = uid, name = type(name) == "string" and name or nil, position = posOf(m) })
+					end
+				end
+			end
+		end
+	end
+	return found
 end
 
-local function manorCoins(egg)
-    local dir = manorEggDir(egg)
-    local currency = dir and dir.currency or "HatchWarCoins"
-    local ok, n = withIdentity(2, function() return require(RS.Library.Client.CurrencyCmds).Get(currency) end)
-    if ok and type(n) == "number" then return n end
-    return nil
+local function nearestTo(eggs, target, maxD)
+	local best, bestD = nil, maxD or math.huge
+	for _, e in ipairs(eggs) do
+		if e.position then
+			local d = (e.position - target).Magnitude
+			if d < bestD then best, bestD = e, d end
+		end
+	end
+	return best
 end
 
-local function manorMaxHatch(egg)
-    if egg and type(egg._maxEggCount) == "number" and egg._maxEggCount > 0 then
-        return math.floor(egg._maxEggCount)
-    end
-    local dir = manorEggDir(egg)
-    local ok, n = withIdentity(2, function() return require(RS.Library.Client.EggCmds).GetMaxHatch(dir) end)
-    if ok and type(n) == "number" and n > 0 then return math.floor(n) end
-    return nil
+------------------------------------------------------------------
+-- หา plot ของเรา
+------------------------------------------------------------------
+local AREA = (string.gsub(ZONE_NAME, "_Zone$", "")) -- "GoldenGrove"
+
+-- plot เก็บตำแหน่งไว้เป็น attribute (อ่านได้แม้แมพตรงนั้นยังไม่โหลด)
+local function attrPos(plot, key)
+	local v = plot:GetAttribute(key)
+	if typeof(v) == "CFrame" then return v.Position end
+	if typeof(v) == "Vector3" then return v end
+	return nil
 end
 
-local function manorAmount(egg)
-    local max = manorMaxHatch(egg)
-    local price = manorPrice(egg)
-    local coins = manorCoins(egg)
-    local amount = max or 1
-    if coins then amount = math.min(amount, math.floor(coins / price)) end
-    if C.manorAmount > 0 then amount = math.min(amount, C.manorAmount) end
-    return math.max(0, math.floor(amount)), max, price, coins
+local function getPlots()
+	local things = workspace:FindFirstChild("__THINGS")
+	return things and things:FindFirstChild("Plots")
 end
 
-local function manorHideEgg(model)
-    if typeof(model) ~= "Instance" or C._manorHidden[model] then return end
-    local saved = { items = {} }
-    C._manorHidden[model] = saved
-    local function hide(d)
-        local prop, off
-        if d:IsA("BasePart") or d:IsA("Decal") or d:IsA("Texture") then
-            prop, off = "Transparency", 1
-        elseif d:IsA("ParticleEmitter") or d:IsA("Beam") or d:IsA("Trail") or d:IsA("Light")
-            or d:IsA("BillboardGui") or d:IsA("SurfaceGui") then
-            prop, off = "Enabled", false
-        end
-        if prop then
-            local okG, cur = pcall(function() return d[prop] end)
-            if okG then
-                saved.items[#saved.items + 1] = { d, prop, cur }
-                pcall(function() d[prop] = off end)
-            end
-        end
-    end
-    for _, d in ipairs(model:GetDescendants()) do hide(d) end
-    saved.conn = model.DescendantAdded:Connect(function(d)
-        if C._manorHidden[model] == saved then task.defer(hide, d) end
-    end)
+local function sectionOf(p)
+	local secs = p and p:FindFirstChild("Sections")
+	return secs and secs:FindFirstChild(SECTION_NAME)
 end
 
-local function manorRestoreEggs()
-    for model, saved in pairs(C._manorHidden) do
-        if saved.conn then pcall(function() saved.conn:Disconnect() end) end
-        for _, s in ipairs(saved.items or saved) do
-            pcall(function() s[1][s[2]] = s[3] end)
-        end
-        C._manorHidden[model] = nil
-    end
+local function isMine(plot)
+	local uid, name = LocalPlayer.UserId, LocalPlayer.Name
+	local function match(v)
+		return v ~= nil and (v == LocalPlayer or v == uid or v == name or tostring(v) == tostring(uid))
+	end
+	for _, a in ipairs({ "Owner", "OwnerId", "OwnerUserId", "UserId", "Player", "OwnerName" }) do
+		if match(plot:GetAttribute(a)) then return true end
+	end
+	return false
 end
 
-local function manorGetRemote()
-    if manorRemote and manorRemote.Parent then return manorRemote end
-    local net = RS:FindFirstChild("Network")
-    manorRemote = net and net:FindFirstChild("CustomEggs_Hatch") or nil
-    return manorRemote
+-- จุดวาร์ปเข้า tycoon ของเรา (เกมใช้ฟังก์ชันนี้วาร์ปเราไป base ตัวเองตอนเข้า event)
+local function myTeleportPos()
+	if not InstancingCmds then return nil end
+	local ok, inst = pcall(InstancingCmds.Get)
+	fixIdentity()
+	if not (ok and type(inst) == "table" and inst.instanceID == EVENT_ID
+		and type(inst.module) == "table" and inst.module.GetTeleport) then
+		return nil
+	end
+	local ok2, tp = pcall(inst.module.GetTeleport, inst)
+	fixIdentity()
+	if not (ok2 and tp) then return nil end
+	return posOf(tp)
 end
 
-local function manorHatch(egg, amount)
-    local remote = manorGetRemote()
-    if not remote then return false, "hatch remote not found" end
-    local ok, a, b = pcall(function()
-        if remote:IsA("RemoteFunction") then return remote:InvokeServer(egg._uid, amount) end
-        remote:FireServer(egg._uid, amount)
-        return true
-    end)
-    if not ok then return false, tostring(a) end
-    if not a then return false, type(b) == "string" and b or "refused" end
-    return true
+local function findSection()
+	local plots = getPlots()
+	if not plots then return nil end
+
+	-- 0) ผู้เล่นกด "ตั้งเป็น base ของฉัน"
+	local ov = state.plotOverride
+	if ov and ov.Parent == plots then return sectionOf(ov), ov, "ตั้งเอง" end
+
+	-- หาเจอแล้วรอบนี้: ใช้ตัวเดิม (plot ไม่เปลี่ยนจนกว่าจะออกจาก event)
+	if state.plotSure and state.plot and state.plot.Parent == plots then
+		return sectionOf(state.plot), state.plot, "จำไว้"
+	end
+
+	-- 1) จุดวาร์ปของเรา เทียบกับ PadSpot_TycoonTeleport / SpawnPosition ของแต่ละ plot
+	--    ต้องตรงกัน "plot เดียว" เท่านั้น ถ้ากำกวม (2 plot ใกล้พอกัน) จะไม่เดา
+	local tp = myTeleportPos()
+	if tp then
+		local best, bestD, second = nil, math.huge, math.huge
+		for _, p in ipairs(plots:GetChildren()) do
+			local d = math.huge
+			local a = attrPos(p, "PadSpot_TycoonTeleport")
+			if a then d = math.min(d, (a - tp).Magnitude) end
+			local sp = p:FindFirstChild("SpawnPosition")
+			local spPos = sp and posOf(sp)
+			if spPos then d = math.min(d, (spPos - tp).Magnitude) end
+			if d < bestD then
+				best, second, bestD = p, bestD, d
+			elseif d < second then
+				second = d
+			end
+		end
+		if best and bestD <= 80 and second > bestD * 3 then
+			return sectionOf(best), best, ("จุดวาร์ปของเรา (ห่าง %d)"):format(math.floor(bestD))
+		end
+		warn("[AutoEgg] GetTeleport ไม่ตรง plot ไหนชัดเจน", tp, bestD, second)
+	else
+		warn("[AutoEgg] เรียก GetTeleport ไม่ได้ (ยังไม่อยู่ใน event?)")
+	end
+
+	-- 2) attribute เจ้าของ (เผื่อเกมเพิ่มในอนาคต)
+	for _, p in ipairs(plots:GetChildren()) do
+		if isMine(p) then return sectionOf(p), p, "attribute เจ้าของ" end
+	end
+
+	return nil -- ไม่เดา
 end
 
-local function manorTeleport()
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not (root and hum and hum.Health > 0) then return false end
-    local rotation = root.CFrame - root.CFrame.Position
-    root.CFrame = CFrame.new(MANOR.TeleportTo) * rotation
-    pcall(function()
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-    return true
+-- plot ที่ตัวเรายืนอยู่ (ปุ่ม "ตั้งเป็น base ของฉัน")
+local function plotAtMe()
+	local plots = getPlots()
+	local me = myPos()
+	if not (plots and me) then return nil end
+	local best, bestD = nil, math.huge
+	for _, p in ipairs(plots:GetChildren()) do
+		local pos = attrPos(p, "PadSpot_" .. AREA .. "_Zone")
+		if not pos then
+			local s = sectionOf(p)
+			local bz = s and s:FindFirstChild("BREAK_ZONES")
+			pos = anchorPos(bz and bz:FindFirstChild(ZONE_NAME)) or anchorPos(s)
+		end
+		local d = pos and (pos - me).Magnitude or math.huge
+		if d < bestD then best, bestD = p, d end
+	end
+	return best, bestD
 end
 
-local function manorTeleportClose(eggPos)
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return false end
-    local flat = Vector3.new(MANOR.TeleportTo.X - eggPos.X, 0, MANOR.TeleportTo.Z - eggPos.Z)
-    local dir = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, 1)
-    local target = Vector3.new(eggPos.X, MANOR.TeleportTo.Y, eggPos.Z) + dir * MANOR.CloseDistance
-    local rotation = root.CFrame - root.CFrame.Position
-    root.CFrame = CFrame.new(target) * rotation
-    pcall(function()
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-    return true
+------------------------------------------------------------------
+-- วาร์ป (ปลอดภัย)
+------------------------------------------------------------------
+-- ทุกการวาร์ปต้องผ่านตรงนี้: ยอมเฉพาะจุดที่ใกล้โซนฟาร์มของ plot เรา
+local function safeTP(target, lookAt)
+	if not (state.anchor and state.plot and state.plot.Parent) then
+		warn("[AutoEgg] ยกเลิกวาร์ป: ยังไม่รู้ base ของเรา")
+		return false
+	end
+	local dist = (target - state.anchor).Magnitude
+	if dist > TP_SAFE_RADIUS then
+		warn(("[AutoEgg] ยกเลิกวาร์ป: จุดหมายห่างโซนฟาร์มเรา %d studs"):format(math.floor(dist)))
+		return false
+	end
+	local c = LocalPlayer.Character
+	if not c then return false end
+	local cf = lookAt and CFrame.new(target, Vector3.new(lookAt.X, target.Y, lookAt.Z)) or CFrame.new(target)
+	return (pcall(function() c:PivotTo(cf) end))
 end
 
-local function manorDebounce()
-    local ok, d = withIdentity(2, function() return require(RS.Library.Client.EggCmds).ComputeDebounce() end)
-    if ok and type(d) == "number" and d > 0 and d < 10 then return d + 0.05 end
-    return 1.7
+-- ออกจาก event = เข้าใหม่อาจได้ plot ใหม่ -> ล้างค่าที่จำไว้
+local function resetPlot()
+	state.plot, state.plotSure, state.plotOverride = nil, false, nil
+	state.anchor, state.stand, state.eggHint = nil, nil, nil
+	state.egg = nil
+end
+if InstancingCmds and InstancingCmds.AddLeaveListener then
+	pcall(InstancingCmds.AddLeaveListener, function(id)
+		if id == EVENT_ID then resetPlot() end
+	end)
+	fixIdentity()
 end
 
-local startManor, stopManor
+local function goToZone()
+	local s, p, how = findSection()
+	if not p then
+		warn("[AutoEgg] หา base ของเราไม่เจอ -> ไปยืนที่ " .. ZONE_NAME .. " ของตัวเอง แล้วกด \"ตั้งเป็น base ของฉัน\"")
+		state.lastErr = "หา base ไม่เจอ: ไปยืนที่ base ตัวเองแล้วกด 'ตั้งเป็น base ของฉัน'"
+		return nil
+	end
 
-startManor = function()
-    C._manorRun = (C._manorRun or 0) + 1
-    local myRun = C._manorRun
-    manorHatched = 0
-    if MANOR.DisableAnimations then manorSetAnimations(true) end
-    manorSetStatus("Manor: starting...")
+	local bz = s and s:FindFirstChild("BREAK_ZONES")
+	local zone = bz and bz:FindFirstChild(ZONE_NAME)
+	local attrZone = attrPos(p, "PadSpot_" .. AREA .. "_Zone")
+	local pos = (zone and anchorPos(zone)) or attrZone or anchorPos(s)
+	if not pos then return nil end
 
-    task.spawn(function()
-        local lastErr, lastTeleport, needTeleport, warnedMax = nil, -math.huge, true, false
-        local debounce = manorDebounce()
-        while alive() and C.manorHatch and C._manorRun == myRun do
-            local waitFor = MANOR.Delay
-            local ok, err = pcall(function()
-                if not getZoneRoot() then
-                    manorSetStatus("Manor: waiting for HatchWar...")
-                    waitFor = 1
-                    return
-                end
+	-- กันพลาด: part จริงกับ attribute ของ plot ต้องอยู่ที่เดียวกัน
+	if zone and attrZone and (anchorPos(zone) - attrZone).Magnitude > 60 then
+		warn("[AutoEgg] ตำแหน่งโซนไม่ตรงกับ plot -> ใช้ค่าจาก attribute")
+		pos = attrZone
+	end
 
-                if doorsPriority() then
-                    manorSetStatus(("Manor: paused - opening doors | hatched %d"):format(manorHatched))
-                    needTeleport = true
-                    waitFor = 0.5
-                    return
-                end
+	state.anchor = pos
+	state.stand = pos
+	state.plot = p
+	state.plotSure = true
+	state.eggHint = attrPos(p, "PadSpot_" .. AREA .. "_Egg") or attrPos(p, AREA .. "_Egg")
+	print("[AutoEgg] plot:", p.Name, "|", how, "| zone:", pos, "| egg:", state.eggHint)
 
-                if needTeleport and doorsHolding() then
-                    manorSetStatus(("Manor: paused - opening doors | hatched %d"):format(manorHatched))
-                    waitFor = 0.25
-                    return
-                end
-
-                if needTeleport then
-                    manorSetStatus("Manor: teleporting to the egg...")
-                    if manorTeleport() then
-                        needTeleport = false
-                        lastTeleport = os.clock()
-                    end
-                    waitFor = 0.5
-                    return
-                end
-
-                local egg, info = manorFindEgg()
-                if not egg then
-                    if info == "module" then
-                        manorSetStatus("Manor: waiting for the egg module...")
-                    elseif info == "locked" then
-                        manorSetStatus("Manor: egg not hatchable yet (zone 6 locked?)")
-                    elseif info == "hidden" then
-                        manorSetStatus("Manor: egg not loaded yet - waiting...")
-                    else
-                        manorSetStatus("Manor: egg not found - waiting...")
-                    end
-                    waitFor = 1
-                    return
-                end
-
-                local char = lp.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                if not root then
-                    waitFor = 0.5
-                    return
-                end
-                local eggPos = typeof(egg._position) == "Vector3" and egg._position or MANOR.TeleportTo
-                if (eggPos - root.Position).Magnitude > MANOR.MaxDistance then
-                    if os.clock() - lastTeleport >= MANOR.TeleportEvery and not doorsHolding() then
-                        lastTeleport = os.clock()
-                        manorSetStatus("Manor: teleporting to the egg...")
-                        manorTeleport()
-                    end
-                    waitFor = 0.25
-                    return
-                end
-
-                if MANOR.HideEggModel then manorHideEgg(egg._model) end
-
-                local amount, max, price, coins = manorAmount(egg)
-                if max == nil and not warnedMax then
-                    warnedMax = true
-                    log("Manor: max hatch amount unknown (GetMaxHatch failed) - hatching x1 until it loads")
-                end
-                if amount < 1 then
-                    manorSetStatus(("Manor: not enough coins (%s, need %s per egg)"):format(fmtNum(coins or 0), fmtNum(price)))
-                    waitFor = 1
-                    return
-                end
-
-                local okH, why = manorHatch(egg, amount)
-                if C._manorRun ~= myRun then return end
-                if okH then
-                    lastErr = nil
-                    manorHatched += amount
-                    manorSetStatus(("Manor: x%d | hatched %d | max %s | %s coins"):format(amount, manorHatched, tostring(max or "?"), fmtNum(coins)))
-                    waitFor = math.max(MANOR.Delay, debounce)
-                else
-                    local msg = tostring(why):lower()
-                    if msg:find("too quickly", 1, true) or msg:find("too fast", 1, true) then
-                        manorSetStatus(("Manor: hatch cooldown... | hatched %d"):format(manorHatched))
-                        waitFor = 0.3
-                        return
-                    end
-                    manorSetStatus("Manor: hatch failed - " .. tostring(why))
-                    if why ~= lastErr then
-                        lastErr = why
-                        log("Manor: hatch failed -", why)
-                    end
-                    if msg:find("close", 1, true) or msg:find("near", 1, true)
-                        or msg:find("far", 1, true) or msg:find("distance", 1, true) then
-                        manorSetStatus("Manor: moving closer to the egg...")
-                        manorTeleportClose(eggPos)
-                    end
-                    waitFor = 1
-                end
-            end)
-            if not ok then
-                log("Manor error:", err)
-                waitFor = 1
-            end
-            task.wait(waitFor)
-        end
-    end)
+	pcall(function() LocalPlayer:RequestStreamAroundAsync(pos, 5) end)
+	safeTP(pos + Vector3.new(0, 3, 0))
+	task.wait(1.5) -- รอแมพ/ไข่โหลด
+	fixIdentity()
+	return pos
 end
 
-stopManor = function()
-    C._manorRun = (C._manorRun or 0) + 1
-    manorRestoreEggs()
-    manorSetAnimations(false)
-    manorSetStatus("Manor: idle")
+-- ขยับเข้าไปใกล้ไข่ แต่ยังอยู่ในโซนฟาร์ม
+local function moveNearEgg()
+	local eggPos = (state.egg and state.egg.position) or state.eggHint
+	if not (eggPos and state.anchor) then return end
+	if (eggPos - state.anchor).Magnitude > 120 then
+		warn("[AutoEgg] ไข่ที่เลือกไม่ได้อยู่ใน base เรา -> ไม่ขยับ")
+		return
+	end
+
+	local s = sectionOf(state.plot)
+	local bz = s and s:FindFirstChild("BREAK_ZONES")
+	local zone = bz and bz:FindFirstChild(ZONE_NAME)
+
+	local cf, size
+	if zone and zone:IsA("BasePart") then
+		cf, size = zone.CFrame, zone.Size
+	elseif zone and zone:IsA("Model") then
+		pcall(function() cf, size = zone:GetBoundingBox() end)
+	end
+
+	local target
+	if cf and size then
+		local lp = cf:PointToObjectSpace(eggPos)
+		local hx = math.max(size.X / 2 - EDGE_MARGIN, 0)
+		local hz = math.max(size.Z / 2 - EDGE_MARGIN, 0)
+		local w = cf:PointToWorldSpace(Vector3.new(math.clamp(lp.X, -hx, hx), 0, math.clamp(lp.Z, -hz, hz)))
+		target = Vector3.new(w.X, state.anchor.Y, w.Z)
+	else
+		target = state.anchor:Lerp(Vector3.new(eggPos.X, state.anchor.Y, eggPos.Z), 0.6)
+	end
+
+	if safeTP(target + Vector3.new(0, 3, 0), eggPos) then
+		state.stand = target
+		print(("[AutoEgg] ขยับไปใกล้ไข่: ห่างไข่ %d studs"):format(math.floor((eggPos - target).Magnitude)))
+	end
 end
 
-local DOORS = {
-    ZoneName = "6 | Count's Manor",
-    Houses = 8,
-    Tick = 1,
-    RetryAfter = 5,
-    BuyRetryAfter = 10,
-    StandBack = 4,
-    SettleTime = 0.4,
-    ArriveRadius = 3,
-    WalkTimeout = 45,
+------------------------------------------------------------------
+-- auto farm
+------------------------------------------------------------------
+local function farmEnabled()
+	if AutoFarmCmds and AutoFarmCmds.IsEnabled then
+		local ok, r = pcall(AutoFarmCmds.IsEnabled)
+		fixIdentity()
+		if ok then return r == true end
+	end
+	return false
+end
+
+local function enableFarm()
+	if farmEnabled() then return true end
+	if AutoFarmCmds and AutoFarmCmds.Enable then
+		pcall(AutoFarmCmds.Enable)
+		fixIdentity()
+	end
+	task.wait(0.5)
+	if not farmEnabled() then
+		local r = ReplicatedStorage.Network:FindFirstChild("AutoFarm_Enable")
+		if r then pcall(function() r:InvokeServer() end) end
+	end
+	return farmEnabled()
+end
+
+local function disableFarm()
+	if AutoFarmCmds and AutoFarmCmds.Disable and farmEnabled() then
+		pcall(AutoFarmCmds.Disable)
+		fixIdentity()
+	end
+end
+
+------------------------------------------------------------------
+-- เลือกไข่
+------------------------------------------------------------------
+local function pickEgg(forceNearest)
+	local eggs = scanEggs()
+	if state.lastEggCount ~= #eggs then
+		state.lastEggCount = #eggs
+		print(("[AutoEgg] เจอไข่ %d ใบ"):format(#eggs))
+	end
+	if #eggs == 0 then return nil end
+
+	if state.anchor then
+		-- 1) ใบที่เคยเลือกไว้ (จำเป็นระยะเทียบกับโซน)
+		if not forceNearest and type(config.eggOffset) == "table" then
+			local target = state.anchor + Vector3.new(config.eggOffset[1], config.eggOffset[2], config.eggOffset[3])
+			local e = nearestTo(eggs, target, 15)
+			if e then return e end
+		end
+		-- 2) ไข่ประจำโซนนี้ของ plot เรา (PadSpot_<AREA>_Egg)
+		if not forceNearest and state.eggHint then
+			local e = nearestTo(eggs, state.eggHint, 20)
+			if e then return e end
+		end
+		-- 3) ใบใกล้จุดฟาร์ม
+		local e = nearestTo(eggs, state.anchor, EGG_RADIUS)
+		if not e then
+			local any = nearestTo(eggs, state.anchor)
+			warn(("[AutoEgg] ไม่มีไข่ในระยะ %d studs (ใบใกล้สุดห่าง %s)"):format(
+				EGG_RADIUS, any and tostring(math.floor((any.position - state.anchor).Magnitude)) or "?"))
+		end
+		return e
+	end
+
+	-- ไม่รู้ base: ไม่วาร์ป แค่เลือกไข่ตามที่จำไว้/ใกล้ตัว
+	if not forceNearest and config.eggName then
+		for _, e in ipairs(eggs) do
+			if e.name == config.eggName then return e end
+		end
+	end
+	local me = myPos()
+	return (me and nearestTo(eggs, me)) or eggs[1]
+end
+
+local function setEgg(e, why)
+	state.egg = e
+	if e then
+		config.eggName = e.name
+		if state.anchor and e.position and (e.position - state.anchor).Magnitude <= TP_SAFE_RADIUS then
+			local o = e.position - state.anchor
+			config.eggOffset = { o.X, o.Y, o.Z }
+		end
+		saveConfig()
+	end
+	state.info = e and ("Egg: " .. (e.name or "?") .. " [" .. string.sub(e.uid, 1, 8) .. "] " .. (why or ""))
+		or "Egg: ไม่เจอ - กด E เปิดไข่เอง 1 ครั้ง"
+	refresh()
+end
+
+------------------------------------------------------------------
+-- ดักจากกด E (hook ใส่เฉพาะตอนต้องใช้ แล้วถอดทันที)
+------------------------------------------------------------------
+local captureOld = nil
+local function removeCaptureHook()
+	if captureOld and hookmetamethod then
+		pcall(hookmetamethod, game, "__namecall", captureOld)
+	end
+	captureOld = nil
+	if getgenv then getgenv().__AutoEggCapture = nil end
+end
+
+local function onCapture(uid)
+	fixIdentity()
+	if not isUid(uid) then return end
+	removeCaptureHook()
+	local name, pos
+	for _, e in ipairs(scanEggs()) do
+		if e.uid == uid then name, pos = e.name, e.position break end
+	end
+	pos = pos or myPos()
+	setEgg({ uid = uid, name = name, position = pos }, "(ดักจากกด E)")
+end
+
+local function installCaptureHook()
+	if captureOld or not (hookmetamethod and getnamecallmethod and checkcaller and getgenv) then return end
+	getgenv().__AutoEggCapture = onCapture
+	local remote = HatchRemote
+	local wrap = newcclosure or function(f) return f end
+	local old
+	old = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+		if rawequal(self, remote) and not checkcaller() and getnamecallmethod() == "InvokeServer" then
+			local cb = getgenv().__AutoEggCapture
+			if cb then task.spawn(cb, (...)) end
+		end
+		return old(self, ...)
+	end))
+	captureOld = old
+end
+
+------------------------------------------------------------------
+-- เข้า event
+------------------------------------------------------------------
+local function inEvent()
+	if not InstancingCmds then return false end
+	local ok, r = pcall(InstancingCmds.IsInInstance, EVENT_ID)
+	return ok and r == true
+end
+
+local function joinEvent()
+	if not InstancingCmds then
+		state.lastErr = "โหลด InstancingCmds ไม่ได้"
+		return false
+	end
+	if inEvent() then return true end
+
+	local ready = false
+	task.spawn(function()
+		pcall(InstancingCmds.All)
+		ready = true
+	end)
+	local t = 0
+	while not ready and t < 15 do t += task.wait(0.25) end
+	fixIdentity()
+
+	for attempt = 1, 3 do
+		state.info = ("กำลังเข้า event %s (%d/3)"):format(EVENT_ID, attempt)
+		refresh()
+		task.spawn(function() pcall(InstancingCmds.Enter, EVENT_ID) end)
+		local w = 0
+		while w < 25 and not inEvent() do w += task.wait(0.5) end
+		fixIdentity()
+		if inEvent() then
+			task.wait(2)
+			return true
+		end
+	end
+	state.lastErr = "เข้า event ไม่ได้"
+	return false
+end
+
+------------------------------------------------------------------
+-- ปิด animation เปิดไข่
+------------------------------------------------------------------
+local noop = function() end
+local patched = {}
+local PATCH = {
+	["Egg Opening Frontend"] = {
+		PlayEggAnimation = noop,
+		PlayNormalEggAnimation = noop,
+	},
 }
 
-local doorsLabel
-local doorsUtilMod, doorsInstancing
-local doorsStats = { active = false, knocks = 0, prizes = 0, last = "", buy = "" }
-
-local function doorsSetStatus(text)
-    if doorsLabel then pcall(function() doorsLabel.Text = text end) end
+local function disableAnimation()
+	if not getsenv then return 0 end
+	local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+	if not ps then return 0 end
+	local count = 0
+	for _, s in ipairs(ps:GetDescendants()) do
+		local targets = s:IsA("LocalScript") and PATCH[s.Name]
+		if targets then
+			local ok, env = pcall(getsenv, s)
+			if ok and type(env) == "table" then
+				for key, repl in pairs(targets) do
+					local val = rawget(env, key)
+					if type(val) == "function" and val ~= repl then
+						table.insert(patched, { env, key, val })
+						env[key] = repl
+						count += 1
+					end
+				end
+			end
+		end
+	end
+	fixIdentity()
+	return count
 end
 
-local function doorsInstance()
-    if not doorsInstancing then
-        local okM, mod = withIdentity(2, function()
-            local m = clientModule("InstancingCmds", 10)
-            return m and require(m)
-        end)
-        if okM and type(mod) == "table" and type(mod.Get) == "function" then doorsInstancing = mod end
-    end
-    if not doorsInstancing then return nil end
-    local ok, inst = withIdentity(2, doorsInstancing.Get)
-    if ok and type(inst) == "table" then return inst end
-    return nil
+local function restoreAnimation()
+	for _, p in ipairs(patched) do
+		pcall(function() p[1][p[2]] = p[3] end)
+	end
+	table.clear(patched)
 end
 
-local function doorsSaved(key)
-    local inst = doorsInstance()
-    if not (inst and type(inst.GetSavedValue) == "function") then return nil end
-    local ok, value = withIdentity(2, function() return inst:GetSavedValue(key) end)
-    if ok then return value end
-    return nil
+------------------------------------------------------------------
+-- FPS BOOST
+--  - ปิดเงา / post effect (Bloom, Blur, SunRays, ColorCorrection, DepthOfField)
+--  - ปิด particle / trail / beam / ควัน / ไฟ (ตัวที่กินเครื่องที่สุดตอนฟาร์ม)
+--  - ลด quality, ปิดหญ้าของ terrain
+--  ปิด boost จะคืนค่าเกือบทั้งหมด
+------------------------------------------------------------------
+local FX_CLASS = { ParticleEmitter = true, Trail = true, Beam = true, Smoke = true, Fire = true, Sparkles = true }
+local boost = { conn = nil, fx = setmetatable({}, { __mode = "k" }), post = {}, light = nil, quality = nil, deco = nil }
+
+local function lighten(d)
+	if FX_CLASS[d.ClassName] then
+		local ok, en = pcall(function() return d.Enabled end)
+		if ok and en then
+			boost.fx[d] = true
+			pcall(function() d.Enabled = false end)
+		end
+	end
 end
 
-local function doorsUtil()
-    if doorsUtilMod then return doorsUtilMod end
-    local ok, mod = withIdentity(2, function() return require(RS.Library.Util.HatchWarDoors) end)
-    if ok and type(mod) == "table" then doorsUtilMod = mod end
-    return doorsUtilMod
+local function applyBoost(on)
+	if on then
+		if not boost.light then
+			boost.light = { GlobalShadows = Lighting.GlobalShadows, FogEnd = Lighting.FogEnd }
+		end
+		pcall(function()
+			Lighting.GlobalShadows = false
+			Lighting.FogEnd = 1e9
+		end)
+		for _, e in ipairs(Lighting:GetDescendants()) do
+			if e:IsA("PostEffect") and e.Enabled then
+				boost.post[e] = true
+				e.Enabled = false
+			end
+		end
+		pcall(function()
+			boost.quality = boost.quality or settings().Rendering.QualityLevel
+			settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+		end)
+		pcall(function()
+			if boost.deco == nil then boost.deco = workspace.Terrain.Decoration end
+			workspace.Terrain.Decoration = false
+		end)
+		-- ของใหม่ที่เกิดขึ้น (เช็คด้วย ClassName ตรงๆ เร็วมาก)
+		if not boost.conn then
+			boost.conn = workspace.DescendantAdded:Connect(lighten)
+		end
+		-- ของที่มีอยู่แล้ว: ทยอยทำทีละก้อน ไม่ให้เกมค้าง
+		task.spawn(function()
+			local list = workspace:GetDescendants()
+			for i = 1, #list do
+				if not config.fpsBoost then return end
+				lighten(list[i])
+				if i % 4000 == 0 then task.wait() end
+			end
+		end)
+	else
+		if boost.conn then boost.conn:Disconnect() boost.conn = nil end
+		for d in pairs(boost.fx) do pcall(function() d.Enabled = true end) end
+		table.clear(boost.fx)
+		for e in pairs(boost.post) do pcall(function() e.Enabled = true end) end
+		table.clear(boost.post)
+		if boost.light then
+			pcall(function()
+				Lighting.GlobalShadows = boost.light.GlobalShadows
+				Lighting.FogEnd = boost.light.FogEnd
+			end)
+		end
+		if boost.quality then pcall(function() settings().Rendering.QualityLevel = boost.quality end) end
+		if boost.deco ~= nil then pcall(function() workspace.Terrain.Decoration = boost.deco end) end
+	end
 end
 
-local function doorsHousesFolder()
-    local root = getZoneRoot()
-    local zone = root and root:FindFirstChild(DOORS.ZoneName)
-    return zone and zone:FindFirstChild("Houses")
+-- ปิดภาพ 3D ทั้งหมด (AFK) = เบาที่สุด เกมยังทำงานปกติ แค่ไม่วาดภาพ
+local function apply3D(off)
+	pcall(function() RunService:Set3dRenderingEnabled(not off) end)
 end
 
-local function doorsUnlockedCount()
-    local houses = doorsSaved("Houses")
-    if type(houses) == "number" and houses == houses then
-        local util = doorsUtil()
-        if util and type(util.Unlocked) == "function" then
-            local ok, n = pcall(util.Unlocked, houses)
-            if ok and type(n) == "number" then return n end
-        end
-        return math.clamp(math.floor(houses), 1, DOORS.Houses)
-    end
-    if doorsInstance() then return 1 end
-    local folder = doorsHousesFolder()
-    if folder then
-        local n, sawLock = 0, false
-        for i = 1, DOORS.Houses do
-            local house = folder:FindFirstChild("House" .. i)
-            if not house then break end
-            if house:GetAttribute("HW_HouseLocked") == true then
-                sawLock = true
-                break
-            end
-            n = i
-        end
-        if sawLock and n > 0 then return n end
-    end
-    return 1
+------------------------------------------------------------------
+-- จำนวนสูงสุด
+------------------------------------------------------------------
+local function getMaxHatch()
+	local n, src
+	if EggCmds then
+		for _, fname in ipairs({ "GetMaxHatch", "GetMaxHatchCount", "GetHatchCount", "MaxHatch" }) do
+			local f = EggCmds[fname]
+			if type(f) == "function" then
+				local ok, r = pcall(f)
+				if ok and tonumber(r) and r > 0 then n, src = math.floor(r), "EggCmds." .. fname break end
+			end
+		end
+	end
+	if not n and Save and Save.Get then
+		local ok, data = pcall(Save.Get)
+		if ok and type(data) == "table" then
+			for _, key in ipairs({ "EggHatchCount", "MaxEggHatch", "HatchCount" }) do
+				local r = tonumber(data[key])
+				if r and r > 0 then n, src = math.floor(r), "Save." .. key break end
+			end
+		end
+	end
+	fixIdentity()
+	return n, src
 end
 
-local function doorsCooldownEnd(doorsTable, houseNumber)
-    local util = doorsUtil()
-    if util and type(util.CooldownEnd) == "function" then
-        local ok, t = pcall(util.CooldownEnd, doorsTable, houseNumber)
-        if ok and type(t) == "number" then return t end
-    end
-    if type(doorsTable) == "table" then
-        local t = tonumber(doorsTable[tostring(houseNumber)]) or tonumber(doorsTable[houseNumber])
-        if t then return t end
-    end
-    return 0
+local function resolveAmount()
+	local n, src = getMaxHatch()
+	if n then
+		state.amount, state.source = n, src
+	elseif config.probedMax then
+		state.amount, state.source = config.probedMax, "max (saved)"
+	else
+		state.amount, state.source = PROBE_START, "probing"
+	end
 end
 
-local function doorsUnlockCost(houseNumber)
-    local util = doorsUtil()
-    if util and type(util.UnlockCost) == "function" then
-        local ok, cost = pcall(util.UnlockCost, houseNumber)
-        if ok and type(cost) == "number" then return cost end
-    end
-    return nil
+------------------------------------------------------------------
+-- เปิดไข่
+------------------------------------------------------------------
+local function hatch(amount)
+	local e = state.egg
+	if not e then return false, "ยังไม่มีไข่" end
+	local ok, a, b = pcall(function()
+		return HatchRemote:InvokeServer(e.uid, amount)
+	end)
+	if not ok then return false, tostring(a) end
+	if a == false then return false, tostring(b or "server rejected") end
+	return true
 end
 
-local function doorsLollipops()
-    local ok, count = withIdentity(2, function()
-        local save = require(RS.Library.Client.Save).Get()
-        local misc = save and save.Inventory and save.Inventory.Misc
-        if type(misc) ~= "table" then return nil end
-        local total = 0
-        for _, item in pairs(misc) do
-            if type(item) == "table" and item.id == "Hatch War Lollipop" then
-                total += tonumber(item._am) or 1
-            end
-        end
-        return total
-    end)
-    if ok and type(count) == "number" then return count end
-    return nil
+------------------------------------------------------------------
+-- GUI
+------------------------------------------------------------------
+local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
+local oldGui = parentGui:FindFirstChild("AutoEggGUI")
+if oldGui then oldGui:Destroy() end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AutoEggGUI"
+ScreenGui.ResetOnSpawn = false
+if not pcall(function() ScreenGui.Parent = parentGui end) then
+	ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 end
 
-local function doorsFighting()
-    local char = lp.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp and hrp:FindFirstChild("HW_BossHoldPosition") then return true end -- still locked in the fight arena
-    local ok, fighting = withIdentity(2, function()
-        local m = clientModule("HatchWarCmds", 10)
-        local boss = m and require(m).Feature("Boss")
-        return boss and boss.IsFighting() == true
-    end)
-    return ok and fighting == true
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.fromOffset(260, 364)
+Frame.Position = UDim2.new(0, 260, 0.5, -182)
+Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+Frame.BorderSizePixel = 0
+Frame.Parent = ScreenGui
+Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
+local stroke = Instance.new("UIStroke", Frame)
+stroke.Color = Color3.fromRGB(70, 70, 90)
+stroke.Thickness = 1.5
+
+local function label(text, x, y, w, h, bold)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.fromOffset(w, h or 18)
+	l.Position = UDim2.fromOffset(x, y)
+	l.BackgroundTransparency = 1
+	l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+	l.TextSize = bold and 16 or 12
+	l.TextColor3 = bold and Color3.fromRGB(235, 235, 245) or Color3.fromRGB(170, 170, 185)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Top
+	l.TextWrapped = true
+	l.Text = text
+	l.Parent = Frame
+	return l
 end
 
-local function doorsRemote()
-    local net = RS:FindFirstChild("Network")
-    return net and net:FindFirstChild("Instancing_InvokeCustomFromClient")
+local function button(x, y, w, h)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(w, h)
+	b.Position = UDim2.fromOffset(x, y)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 13
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.AutoButtonColor = false
+	b.Parent = Frame
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	return b
 end
 
-local function doorsInvoke(action, houseNumber)
-    local remote = doorsRemote()
-    if not remote then return false, "remote not found" end
-    local ok, a, b = pcall(function()
-        return remote:InvokeServer("HatchWar", "HW_Doors_" .. action, houseNumber)
-    end)
-    if not ok then return false, tostring(a) end
-    if a == true then return true, b end
-    if type(a) == "table" then return true, a end
-    if type(b) == "string" then return false, b end
-    if type(a) == "string" then return false, a end
-    return false, "refused"
+local ON = Color3.fromRGB(46, 170, 90)
+local OFF = Color3.fromRGB(170, 50, 50)
+local GREY = Color3.fromRGB(80, 80, 95)
+
+label("Auto Event Egg", 12, 8, 200, 22, true)
+
+local Close = button(230, 7, 24, 24)
+Close.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+Close.Text = "X"
+
+local EggLabel = label("Egg: กำลังหา...", 12, 36, 236, 32)
+local ListBtn = button(12, 70, 115, 28)
+ListBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 160)
+ListBtn.Text = "รายการไข่"
+local CapBtn = button(133, 70, 115, 28)
+CapBtn.BackgroundColor3 = Color3.fromRGB(150, 100, 40)
+CapBtn.Text = "ดักจากกด E"
+
+local ListFrame = Instance.new("ScrollingFrame")
+ListFrame.Size = UDim2.fromOffset(250, 364)
+ListFrame.Position = UDim2.fromOffset(268, 0)
+ListFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+ListFrame.BorderSizePixel = 0
+ListFrame.ScrollBarThickness = 4
+ListFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ListFrame.CanvasSize = UDim2.new()
+ListFrame.Visible = false
+ListFrame.Parent = Frame
+Instance.new("UICorner", ListFrame).CornerRadius = UDim.new(0, 10)
+do
+	local pad = Instance.new("UIPadding", ListFrame)
+	pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
+	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 10)
+	local layout = Instance.new("UIListLayout", ListFrame)
+	layout.Padding = UDim.new(0, 4)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
 end
 
-local function doorsPart(houseNumber)
-    local root = getZoneRoot()
-    local interact = root and root:FindFirstChild("INTERACT")
-    local folder = interact and interact:FindFirstChild("Doors")
-    local part = folder and folder:FindFirstChild(tostring(houseNumber))
-    if part and part:IsA("BasePart") then return part end
-    return nil
+local JoinBtn = button(12, 104, 115, 28)
+JoinBtn.TextSize = 11
+local BaseBtn = button(133, 104, 115, 28)
+BaseBtn.BackgroundColor3 = Color3.fromRGB(110, 70, 160)
+BaseBtn.TextSize = 11
+BaseBtn.Text = "ตั้งเป็น base ของฉัน"
+local FarmBtn = button(12, 138, 236, 28)
+local AnimBtn = button(12, 172, 236, 28)
+local BoostBtn = button(12, 206, 115, 28)
+BoostBtn.TextSize = 11
+local No3DBtn = button(133, 206, 115, 28)
+No3DBtn.TextSize = 11
+local Toggle = button(12, 240, 236, 38)
+Toggle.TextSize = 15
+
+local Status = label("", 12, 284, 236, 74)
+
+-- เขียน property เฉพาะตอนค่าเปลี่ยน (ไม่ให้ GUI วาดใหม่ทุกครึ่งวิโดยไม่จำเป็น)
+local uiCache = setmetatable({}, { __mode = "k" })
+local function setProp(obj, prop, val)
+	local t = uiCache[obj]
+	if not t then t = {} uiCache[obj] = t end
+	if t[prop] ~= val then
+		t[prop] = val
+		obj[prop] = val
+	end
 end
 
-local function doorsSpot(houseNumber)
-    local part = doorsPart(houseNumber)
-    if not part then return nil end
-    local front = (part.CFrame * CFrame.new(0, 0, -DOORS.StandBack)).Position
-    local back = (part.CFrame * CFrame.new(0, 0, DOORS.StandBack)).Position
-    local folder = doorsHousesFolder()
-    local house = folder and folder:FindFirstChild("House" .. houseNumber)
-    if house and house:IsA("PVInstance") then
-        local hp = house:GetPivot().Position
-        local df = Vector3.new(front.X - hp.X, 0, front.Z - hp.Z).Magnitude
-        local db = Vector3.new(back.X - hp.X, 0, back.Z - hp.Z).Magnitude
-        if db > df then front = back end
-    end
-    return Vector3.new(front.X, part.Position.Y, front.Z)
+refresh = function()
+	fixIdentity()
+	if not Frame.Visible then return end -- ซ่อน GUI อยู่ = ไม่ต้องอัปเดต
+	pcall(function()
+		setProp(EggLabel, "Text", state.info or "Egg: กำลังหา...")
+		setProp(JoinBtn, "Text", config.autoJoin and "AUTO JOIN: ON" or "AUTO JOIN: OFF")
+		setProp(JoinBtn, "BackgroundColor3", config.autoJoin and ON or GREY)
+		local farmOn = config.autoFarm and farmEnabled()
+		setProp(FarmBtn, "Text", ("AUTO FARM: %s%s"):format(config.autoFarm and "ON" or "OFF",
+			config.autoFarm and (farmOn and " (ทำงาน)" or " (ยังไม่ทำงาน)") or ""))
+		setProp(FarmBtn, "BackgroundColor3", config.autoFarm and ON or GREY)
+		setProp(AnimBtn, "Text", config.skipAnim and ("SKIP ANIMATION: ON (" .. #patched .. ")") or "SKIP ANIMATION: OFF")
+		setProp(AnimBtn, "BackgroundColor3", config.skipAnim and ON or GREY)
+		setProp(BoostBtn, "Text", config.fpsBoost and "FPS BOOST: ON" or "FPS BOOST: OFF")
+		setProp(BoostBtn, "BackgroundColor3", config.fpsBoost and ON or GREY)
+		setProp(No3DBtn, "Text", config.no3d and "ปิดภาพ 3D: ON" or "ปิดภาพ 3D: OFF")
+		setProp(No3DBtn, "BackgroundColor3", config.no3d and ON or GREY)
+		setProp(Toggle, "Text", state.running and "AUTO HATCH: ON" or "AUTO HATCH: OFF")
+		setProp(Toggle, "BackgroundColor3", state.running and ON or OFF)
+		local mins = math.max((os.clock() - state.startedAt) / 60, 1 / 60)
+		setProp(Status, "Text", string.format("x%s (%s) | ทุก %.2fs\nhatched: %d | %d ใบ/นาที | ช้าไป %d\nplot: %s | event: %s%s",
+			tostring(state.amount or "?"), state.source, state.interval,
+			state.hatched, math.floor(state.hatched / mins), state.quickCount,
+			state.plot and state.plot.Name or "?", inEvent() and "yes" or "no",
+			state.lastErr and ("\n" .. state.lastErr) or ""))
+	end)
 end
 
-local function doorsTeleport(houseNumber)
-    local spot = doorsSpot(houseNumber)
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not (spot and root and hum and hum.Health > 0) then return false end
-    doorsHoldUntil = os.clock() + DOORS.SettleTime + 1
-    local rotation = root.CFrame - root.CFrame.Position
-    root.CFrame = CFrame.new(spot) * rotation
-    pcall(function()
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end)
-    return true
+------------------------------------------------------------------
+-- เตรียมพร้อม: เข้า event -> วาร์ปไปโซน -> เปิดฟาร์ม -> หาไข่ -> ขยับใกล้ไข่
+------------------------------------------------------------------
+local function prepare()
+	if state.busyPrep then
+		while state.busyPrep do task.wait(0.2) end
+		return state.egg ~= nil
+	end
+	state.busyPrep = true
+	state.lastPrep = os.clock()
+	if config.autoJoin and not inEvent() then
+		joinEvent()
+	end
+	if not inEvent() then
+		-- ไม่อยู่ใน event = ไม่มี plot ของเรา -> ห้ามวาร์ป
+		state.busyPrep = false
+		return false
+	end
+
+	state.info = "กำลังไป " .. ZONE_NAME
+	refresh()
+	goToZone()
+
+	if config.autoFarm and state.anchor then
+		state.info = "กำลังเปิด auto farm"
+		refresh()
+		enableFarm()
+	end
+
+	local e
+	for _ = 1, 10 do
+		e = pickEgg(false)
+		if e then break end
+		task.wait(1)
+	end
+	fixIdentity()
+	if e then
+		setEgg(e, config.eggOffset and "(จากที่จำไว้)" or "(ใกล้สุด)")
+		moveNearEgg()
+		if config.autoFarm and state.anchor then task.wait(0.5) enableFarm() end
+	elseif not state.egg then
+		setEgg(nil)
+		installCaptureHook()
+	end
+	state.busyPrep = false
+	return state.egg ~= nil
 end
 
-local function doorsWalkTo(spot, keepGoing)
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not (spot and hum and root and hum.Health > 0) then return false, "character not ready" end
+------------------------------------------------------------------
+-- loop
+------------------------------------------------------------------
+local function worker(session)
+	while state.running and state.session == session and ScreenGui.Parent do
+		if not state.egg then
+			task.wait(1)
+		else
+			-- จังหวะเปิด: นับจาก "เวลาที่เปิดติดครั้งล่าสุด" ไม่ใช่นับต่อจากตอนได้คำตอบ
+			-- (แบบเก่าเอา ping + ดีเลย์มาบวกกัน ทำให้ช้ากว่า cooldown จริงของเซิร์ฟมาก)
+			local due = state.lastOkAt + state.interval
+			local now = os.clock()
+			if due > now then task.wait(due - now) end
 
-    local function flatTo(p)
-        local r = root.Position
-        return Vector3.new(p.X - r.X, 0, p.Z - r.Z).Magnitude
-    end
-    if flatTo(spot) <= DOORS.ArriveRadius then
-        doorsHoldUntil = os.clock() + DOORS.SettleTime + 1
-        return true
-    end
-
-    doorsHoldUntil = os.clock() + 1.5
-    doorsPriorityUntil = math.max(doorsPriorityUntil, os.clock() + DOORS.Tick + 2.5)
-    if hoverboardOn() then
-        local okHook, hooked = pcall(installHoverboardSteering)
-        if not (okHook and hooked) then
-            -- the board ignores MoveTo without the steering hook, so get off it and walk
-            fireNetwork("Hoverboard_RequestUnequip")
-            local t = os.clock()
-            while hoverboardOn() and os.clock() - t < 3 do
-                doorsHoldUntil = os.clock() + 1.5
-                task.wait(0.1)
-            end
-        end
-    end
-
-    local waypoints
-    local okP, path = pcall(function()
-        local p = game:GetService("PathfindingService"):CreatePath({
-            AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 8,
-        })
-        p:ComputeAsync(root.Position, spot)
-        return p
-    end)
-    if okP and path and path.Status == Enum.PathStatus.Success then
-        local okW, wps = pcall(function() return path:GetWaypoints() end)
-        if okW and type(wps) == "table" and #wps > 0 then waypoints = wps end
-    end
-    if not waypoints then
-        waypoints = { { Position = spot, Action = Enum.PathWaypointAction.Walk } }
-    end
-
-    local deadline = os.clock() + DOORS.WalkTimeout
-    local stuck, okWalk, why = 0, true, nil
-    for index = (#waypoints > 1 and 2 or 1), #waypoints do
-        local wp = waypoints[index]
-        local target = wp.Position
-        local reach = index == #waypoints and DOORS.ArriveRadius or 4
-        local best, progressAt = math.huge, os.clock()
-        if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
-        while true do
-            if not keepGoing() then okWalk, why = false, "stopped"; break end
-            if not (hum.Parent and root.Parent and hum.Health > 0) then okWalk, why = false, "character died"; break end
-            if os.clock() > deadline then okWalk, why = false, "walk timed out"; break end
-            if doorsFighting() then okWalk, why = false, "a fight started"; break end
-            doorsHoldUntil = os.clock() + 1.5
-            doorsPriorityUntil = math.max(doorsPriorityUntil, os.clock() + DOORS.Tick + 2.5)
-            doorsWalkTarget = target
-            hum:MoveTo(target)
-            task.wait(0.1)
-            local d = flatTo(target)
-            if d <= reach then break end
-            if d < best - 0.5 then
-                best, progressAt = d, os.clock()
-                stuck = 0
-            elseif os.clock() - progressAt > 1.5 then
-                hum.Jump = true
-                progressAt = os.clock()
-                stuck += 1
-                if stuck >= 4 then okWalk, why = false, "stuck on the way"; break end
-            end
-        end
-        if not okWalk then break end
-    end
-
-    doorsWalkTarget = nil
-    pcall(function() hum:MoveTo(root.Position) end)
-    if okWalk and flatTo(spot) > DOORS.ArriveRadius + 2 then okWalk, why = false, "did not reach the door" end
-    if okWalk then doorsHoldUntil = os.clock() + DOORS.SettleTime + 1 end
-    return okWalk, why
+			local sentAt = os.clock()
+			local ok, err = hatch(state.amount)
+			if ok then
+				state.lastOkAt = sentAt
+				state.hatched += state.amount
+				state.lastErr = nil
+				state.fails = 0
+				state.okCount += 1
+				if config.skipAnim and Variables then
+					pcall(function() Variables.OpeningEgg = 0 end)
+				end
+			else
+				if string.find(string.lower(tostring(err)), "quickly") then
+					-- เร็วเกิน: ไม่ปรับความเร็ว (ค่าตายตัว) แค่รออีก 1 รอบแล้วค่อยเปิดใหม่
+					state.lastOkAt = os.clock()
+					state.quickCount += 1
+				else
+					state.lastErr = "error: " .. tostring(err)
+					state.fails += 1
+					if state.fails >= 5 then
+						state.fails = 0
+						prepare()
+					end
+					task.wait(0.5)
+				end
+			end
+			task.wait() -- กันลูปหมุนในเฟรมเดียว
+		end
+	end
 end
 
-local function doorsGoTo(houseNumber, keepGoing)
-    if C.doorsMethod == "Walk" then
-        local spot = doorsSpot(houseNumber)
-        if not spot then return false, "door not found" end
-        return doorsWalkTo(spot, keepGoing)
-    end
-    if doorsTeleport(houseNumber) then return true end
-    return false, "door or character not ready"
+local function start()
+	state.session += 1
+	local session = state.session
+	state.interval = HATCH_INTERVAL -- ค่าตายตัว ไม่ปรับเอง
+	state.lastOkAt, state.okCount, state.quickCount = 0, 0, 0
+	state.hatched, state.startedAt = 0, os.clock()
+	prepare()
+	resolveAmount()
+	refresh()
+
+	while state.running and state.session == session and state.source == "probing" do
+		if not state.egg then task.wait(1) continue end
+		local ok = hatch(state.amount)
+		if ok then
+			state.hatched += state.amount
+			state.source = "max (probed)"
+			config.probedMax = state.amount
+			saveConfig()
+		elseif state.amount > 1 then
+			state.amount -= 1
+			state.lastErr = "ลองลดเป็น x" .. state.amount
+			task.wait(0.15)
+		else
+			state.lastErr = "เปิดไม่ได้เลย เช็คเงิน/ระยะไข่"
+			state.amount = PROBE_START
+			task.wait(2)
+		end
+		refresh()
+	end
+
+	for _ = 1, THREADS do
+		task.spawn(worker, session)
+	end
 end
 
-local hubReady = false
+local function setRunning(on)
+	state.running = on
+	config.running = on
+	saveConfig()
+	if on then task.spawn(start) else state.session += 1 end
+	refresh()
+end
 
+------------------------------------------------------------------
+-- ปุ่ม
+------------------------------------------------------------------
+Toggle.MouseButton1Click:Connect(function()
+	setRunning(not state.running)
+end)
+
+local function buildList()
+	local eggs = scanEggs()
+	fixIdentity()
+	for _, c in ipairs(ListFrame:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+	-- รู้ base แล้ว: โชว์เฉพาะไข่ใน base เรา (กันเลือกไข่บ้านคนอื่น)
+	if state.anchor then
+		local mine = {}
+		for _, e in ipairs(eggs) do
+			if e.position and (e.position - state.anchor).Magnitude <= TP_SAFE_RADIUS then
+				table.insert(mine, e)
+			end
+		end
+		eggs = mine
+	end
+	local me = myPos()
+	local function dist(e)
+		return (me and e.position) and (e.position - me).Magnitude or math.huge
+	end
+	table.sort(eggs, function(a, b) return dist(a) < dist(b) end)
+
+	for i, e in ipairs(eggs) do
+		local d = dist(e)
+		local b = Instance.new("TextButton")
+		b.LayoutOrder = i
+		b.Size = UDim2.new(1, 0, 0, 30)
+		b.AutoButtonColor = true
+		b.BackgroundColor3 = (state.egg and state.egg.uid == e.uid) and ON or Color3.fromRGB(45, 45, 60)
+		b.TextColor3 = Color3.new(1, 1, 1)
+		b.Font = Enum.Font.Gotham
+		b.TextSize = 12
+		b.TextXAlignment = Enum.TextXAlignment.Left
+		b.Text = string.format("  %d. %s  |  %s  |  %s", i, e.name or "?",
+			d < math.huge and (math.floor(d) .. "m") or "?m", string.sub(e.uid, 1, 6))
+		b.Parent = ListFrame
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+		b.MouseButton1Click:Connect(function()
+			setEgg(e, "(เลือกจากรายการ)")
+			task.spawn(moveNearEgg)
+			ListFrame.Visible = false
+		end)
+	end
+
+	if #eggs == 0 then
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(1, 0, 0, 40)
+		l.BackgroundTransparency = 1
+		l.TextWrapped = true
+		l.Font = Enum.Font.Gotham
+		l.TextSize = 12
+		l.TextColor3 = Color3.fromRGB(200, 200, 210)
+		l.Text = "ไม่เจอไข่ใน base เรา ใช้ปุ่ม \"ดักจากกด E\" แทน"
+		l.Parent = ListFrame
+	end
+	ListFrame.Visible = true
+end
+
+ListBtn.MouseButton1Click:Connect(function()
+	if ListFrame.Visible then ListFrame.Visible = false else task.spawn(buildList) end
+end)
+
+CapBtn.MouseButton1Click:Connect(function()
+	installCaptureHook()
+	state.info = "ไปกด E ที่ไข่ที่ต้องการ 1 ครั้ง..."
+	refresh()
+end)
+
+JoinBtn.MouseButton1Click:Connect(function()
+	config.autoJoin = not config.autoJoin
+	saveConfig()
+	refresh()
+	if config.autoJoin then task.spawn(prepare) end
+end)
+
+BaseBtn.MouseButton1Click:Connect(function()
+	if not inEvent() then
+		state.lastErr = "ต้องอยู่ใน event ก่อน"
+		refresh()
+		return
+	end
+	local p, d = plotAtMe()
+	if p and d < TP_SAFE_RADIUS then
+		state.plotOverride = p
+		state.plotSure = false
+		state.lastErr = nil
+		print("[AutoEgg] ตั้ง base ของฉัน = plot", p.Name, ("(ห่าง %d studs)"):format(math.floor(d)))
+		state.info = "base ของฉัน = plot " .. p.Name
+		refresh()
+		task.spawn(prepare)
+	else
+		state.lastErr = "ยืนไกล base เกินไป เดินเข้าไปใน " .. ZONE_NAME .. " ก่อน"
+		refresh()
+	end
+end)
+
+FarmBtn.MouseButton1Click:Connect(function()
+	config.autoFarm = not config.autoFarm
+	saveConfig()
+	task.spawn(function()
+		if config.autoFarm then enableFarm() else disableFarm() end
+		refresh()
+	end)
+	refresh()
+end)
+
+AnimBtn.MouseButton1Click:Connect(function()
+	config.skipAnim = not config.skipAnim
+	saveConfig()
+	restoreAnimation()
+	if config.skipAnim then disableAnimation() end
+	refresh()
+end)
+
+BoostBtn.MouseButton1Click:Connect(function()
+	config.fpsBoost = not config.fpsBoost
+	saveConfig()
+	applyBoost(config.fpsBoost)
+	refresh()
+end)
+
+No3DBtn.MouseButton1Click:Connect(function()
+	config.no3d = not config.no3d
+	saveConfig()
+	apply3D(config.no3d)
+	refresh()
+end)
+
+Close.MouseButton1Click:Connect(function()
+	state.running = false
+	state.session += 1
+	restoreAnimation()
+	removeCaptureHook()
+	apply3D(false)          -- ปิด GUI แล้วต้องเห็นภาพเกมเสมอ
+	applyBoost(false)
+	ScreenGui:Destroy()
+end)
+
+-- ลากหน้าต่าง
+do
+	local dragging, dragStart, startPos
+	Frame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, input.Position, Frame.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+-- RightShift = ซ่อน/แสดง
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+		Frame.Visible = not Frame.Visible
+		if Frame.Visible then refresh() end
+	end
+end)
+
+------------------------------------------------------------------
+-- ลูปพื้นหลัง (รวมเป็นลูปเดียว)
+--  - อัปเดต GUI ทุก 0.5 วิ
+--  - ทุก 5 วิ: ถ้าหลุด event -> เข้าใหม่ / ถ้า auto farm หลุด -> กลับจุดยืนแล้วเปิดใหม่
+------------------------------------------------------------------
 task.spawn(function()
-    local nextTry, knockFails, buyRetryAt, buyFails = {}, {}, 0, 0
-    local knockGlobalFails, knockGlobalRetryAt = 0, 0
-    local lastBuyErr, lastKnockErr = nil, nil
-    local lastBought, lastBoughtAt = 0, 0
-    local function keepKnocking() return alive() and C.running and C.autoKnock end
-    local function keepBuying() return alive() and C.running and C.autoBuyHouses end
-    local function backoff(base, fails, cap) return math.min(base * 2 ^ math.max(fails - 1, 0), cap) end
-    while alive() and not hubReady do task.wait(0.1) end
-    while alive() do
-        if not (C.running and (C.autoKnock or C.autoBuyHouses)) then
-            if trickTapping() and doorsFighting() then
-                doorsPriorityUntil = os.clock() + DOORS.Tick + 2.5 -- never pull the player out of a running Trick fight
-            else
-                doorsPriorityUntil = 0
-                trickActiveUntil, trickSeenFight = 0, false
-            end
-            if doorsStats.active then
-                doorsStats.active = false
-                doorsSetStatus("Doors: idle")
-            end
-            task.wait(0.5)
-        else
-            doorsStats.active = true
-            local ok, err = pcall(function()
-                if not getZoneRoot() then
-                    doorsPriorityUntil = 0
-                    doorsSetStatus("Doors: waiting for HatchWar...")
-                    return
-                end
-
-                local unlocked = doorsUnlockedCount()
-                local clock = os.clock()
-                local fighting = doorsFighting()
-                local verb = C.doorsMethod == "Walk" and "walking" or "teleporting"
-
-                if trickTapping() then
-                    if fighting then
-                        trickSeenFight = true
-                    elseif trickSeenFight or clock > trickWaitUntil then
-                        trickActiveUntil, trickSeenFight = 0, false
-                    end
-                end
-
-                local buyTarget = nil
-                if C.autoBuyHouses then
-                    local waitingForSave = lastBought > unlocked and clock - lastBoughtAt < 15
-                    if unlocked >= DOORS.Houses then
-                        doorsStats.buy = "all houses owned"
-                    elseif waitingForSave then
-                        doorsStats.buy = ("waiting for house %d to register..."):format(lastBought)
-                    elseif clock >= buyRetryAt then
-                        local target = unlocked + 1
-                        local cost = doorsUnlockCost(target)
-                        local lollipops = doorsLollipops()
-                        if cost and cost >= math.huge then
-                            buyRetryAt = clock + DOORS.BuyRetryAfter
-                            doorsStats.buy = ("house %d: not available yet"):format(target)
-                        elseif cost and lollipops == nil then
-                            buyRetryAt = clock + DOORS.BuyRetryAfter
-                            doorsStats.buy = ("house %d: lollipop count unavailable"):format(target)
-                        elseif cost and lollipops < cost then
-                            buyRetryAt = clock + DOORS.BuyRetryAfter
-                            doorsStats.buy = ("house %d: need %s lollipops (have %s)"):format(target, fmtNum(cost), fmtNum(lollipops))
-                        else
-                            buyTarget = target
-                        end
-                    end
-                end
-
-                local knockReady, soonest = {}, nil
-                local knocksPaused = C.autoKnock and clock < knockGlobalRetryAt
-                if C.autoKnock and not knocksPaused then
-                    local doorsTable = doorsSaved("Doors")
-                    local now = workspace:GetServerTimeNow()
-                    for i = 1, unlocked do
-                        local remaining = doorsCooldownEnd(doorsTable, i) - now
-                        if remaining <= 0 then
-                            if (nextTry[i] or 0) <= clock then knockReady[#knockReady + 1] = i end
-                        elseif not soonest or remaining < soonest then
-                            soonest = remaining
-                        end
-                    end
-                end
-
-                local pending = buyTarget ~= nil or #knockReady > 0
-                if pending or trickTapping() then
-                    doorsPriorityUntil = os.clock() + DOORS.Tick + 2.5
-                else
-                    doorsPriorityUntil = 0
-                end
-
-                local trickStarting = trickTapping() and not trickSeenFight and clock <= trickWaitUntil
-                local knockNote = ""
-                if knocksPaused then
-                    knockNote = (" | knocks paused %ds (refused)"):format(math.ceil(knockGlobalRetryAt - clock))
-                end
-                if fighting or trickStarting then
-                    if pending or trickTapping() then knockNote = " | waiting for the fight to end" end
-                elseif buyTarget then
-                    doorsSetStatus(("Doors: %s to locked house %d..."):format(verb, buyTarget))
-                    local moved, why = doorsGoTo(buyTarget, keepBuying)
-                    if not moved then
-                        buyFails += 1
-                        buyRetryAt = os.clock() + backoff(DOORS.RetryAfter, buyFails, 120)
-                        doorsStats.buy = ("house %d: %s"):format(buyTarget, tostring(why or "could not reach the door"))
-                    else
-                        task.wait(DOORS.SettleTime)
-                        if doorsFighting() then
-                            buyRetryAt = os.clock() + 1
-                        elseif not keepBuying() then
-                            buyRetryAt = os.clock() + 1
-                        else
-                            local okU, why2 = doorsInvoke("Unlock", buyTarget)
-                            if okU then
-                                buyFails = 0
-                                lastBought, lastBoughtAt = buyTarget, os.clock()
-                                buyRetryAt = os.clock() + 2
-                                doorsStats.buy = ("bought house %d"):format(buyTarget)
-                                lastBuyErr = nil
-                                log("Doors: unlocked house", buyTarget)
-                            else
-                                buyFails += 1
-                                buyRetryAt = os.clock() + backoff(DOORS.BuyRetryAfter, buyFails, 300)
-                                doorsStats.buy = ("house %d: %s"):format(buyTarget, tostring(why2))
-                                if why2 ~= lastBuyErr then
-                                    lastBuyErr = why2
-                                    log("Doors: could not buy house", buyTarget, "-", why2)
-                                end
-                            end
-                        end
-                    end
-                elseif #knockReady > 0 then
-                    local ready = knockReady[1]
-                    local char = lp.Character
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local bestD = math.huge
-                        for _, i in ipairs(knockReady) do
-                            local spot = doorsSpot(i)
-                            if spot then
-                                local d = (spot - root.Position).Magnitude
-                                if d < bestD then ready, bestD = i, d end
-                            end
-                        end
-                    end
-
-                    doorsSetStatus(("Doors: %s to house %d..."):format(verb, ready))
-                    local moved, why = doorsGoTo(ready, keepKnocking)
-                    if not moved then
-                        knockFails[ready] = (knockFails[ready] or 0) + 1
-                        nextTry[ready] = os.clock() + backoff(DOORS.RetryAfter, knockFails[ready], 120)
-                        doorsStats.last = ("house %d: %s"):format(ready, tostring(why or "could not reach the door"))
-                    else
-                        task.wait(DOORS.SettleTime)
-                        if doorsFighting() then
-                            nextTry[ready] = os.clock() + 1
-                            knockNote = " | waiting for the fight to end"
-                        elseif not keepKnocking() then
-                            nextTry[ready] = os.clock() + 1
-                        else
-                            local okK, result = doorsInvoke("Knock", ready)
-                            if okK then
-                                knockFails[ready] = 0
-                                knockGlobalFails = 0
-                                doorsStats.knocks += 1
-                                local prizes = type(result) == "table" and type(result.Rolls) == "table" and #result.Rolls or 0
-                                doorsStats.prizes += prizes
-                                local trick = type(result) == "table" and result.Result == "Trick"
-                                local extra = trick and " + TRICK fight!" or ""
-                                if trick then
-                                    trickActiveUntil = os.clock() + 120
-                                    trickWaitUntil = os.clock() + 10
-                                    trickSeenFight = false
-                                    doorsPriorityUntil = os.clock() + DOORS.Tick + 2.5
-                                    if bossScanCircles then pcall(bossScanCircles) end
-                                end
-                                doorsStats.last = ("house %d: +%d prizes%s"):format(ready, prizes, extra)
-                                nextTry[ready] = os.clock() + 3
-                                lastKnockErr = nil
-                                log("Doors: knocked house", ready, "-", prizes, "prizes" .. extra)
-                            else
-                                knockFails[ready] = (knockFails[ready] or 0) + 1
-                                nextTry[ready] = os.clock() + backoff(DOORS.RetryAfter, knockFails[ready], 120)
-                                knockGlobalFails += 1
-                                if knockGlobalFails >= 3 then
-                                    knockGlobalRetryAt = os.clock() + backoff(15, knockGlobalFails - 2, 300)
-                                end
-                                doorsStats.last = ("house %d: %s"):format(ready, tostring(result))
-                                if result ~= lastKnockErr then
-                                    lastKnockErr = result
-                                    log("Doors: knock on house", ready, "refused -", result)
-                                end
-                            end
-                        end
-                    end
-                elseif soonest then
-                    knockNote = (" | next knock in %ds"):format(math.ceil(soonest))
-                end
-
-                local parts = { ("Doors: %d/%d houses"):format(unlocked, DOORS.Houses) }
-                if C.autoKnock then
-                    parts[#parts + 1] = ("knocks %d (%d prizes)"):format(doorsStats.knocks, doorsStats.prizes)
-                    if doorsStats.last ~= "" then parts[#parts + 1] = doorsStats.last end
-                end
-                if C.autoBuyHouses and doorsStats.buy ~= "" then parts[#parts + 1] = "buy: " .. doorsStats.buy end
-                if pending or trickTapping() then
-                    -- keep Boss / Manor paused until the next tick re-checks what is still ready
-                    doorsPriorityUntil = math.max(doorsPriorityUntil, os.clock() + DOORS.Tick + 2.5)
-                end
-                if doorsPriority() and (C.autoBoss or C.manorHatch) then parts[#parts + 1] = "Boss/Manor paused" end
-                doorsSetStatus(table.concat(parts, " | ") .. knockNote)
-            end)
-            if not ok then log("Doors error:", err) end
-            task.wait(DOORS.Tick)
-        end
-    end
+	local tick5, outSince = 0, nil
+	while ScreenGui.Parent do
+		refresh()
+		task.wait(0.5)
+		tick5 += 0.5
+		if tick5 >= 5 then
+			tick5 = 0
+			if not state.busyPrep then
+				local inside = inEvent()
+				if not inside then
+					outSince = outSince or os.clock()
+					-- หลุด event เกิน 10 วิ และเปิด auto join ไว้ -> เข้าใหม่
+					if config.autoJoin and (state.running or config.autoFarm) and os.clock() - outSince > 10 then
+						outSince = nil
+						task.spawn(prepare)
+					end
+				else
+					outSince = nil
+					if not state.plot then
+						-- กลับเข้ามาแล้วแต่ยังไม่รู้ base (ลองใหม่ทุก 30 วิ ไม่ให้วนถี่)
+						if os.clock() - (state.lastPrep or 0) > 30 then task.spawn(prepare) end
+					elseif config.autoFarm and not farmEnabled() then
+						local me = myPos()
+						local spot = state.stand or state.anchor
+						if me and spot and (me - spot).Magnitude > 30 then
+							safeTP(spot + Vector3.new(0, 3, 0))
+							task.wait(1)
+						end
+						enableFarm()
+					end
+				end
+			end
+		end
+	end
 end)
 
-local function inst(cls, props, parent)
-    local o = Instance.new(cls)
-    for k, v in pairs(props or {}) do o[k] = v end
-    if parent then o.Parent = parent end
-    return o
-end
-local function corner(r, p) return inst("UICorner", { CornerRadius = UDim.new(0, r or 6) }, p) end
-local function stroke(t, c, p) return inst("UIStroke", { Thickness = t or 1, Color = c or Color3.fromRGB(55, 55, 55), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, p) end
-
-local BG = Color3.fromRGB(0, 0, 0)
-local EL = Color3.fromRGB(18, 18, 18)
-local TXT = Color3.fromRGB(235, 235, 235)
-local MID = Color3.fromRGB(150, 150, 150)
-local OFF = Color3.fromRGB(80, 80, 80)
-local LINE = Color3.fromRGB(55, 55, 55)
-local ACC = Color3.fromRGB(255, 255, 255)
-
-local gp
-do local ok, h = pcall(function() return gethui and gethui() end); gp = (ok and h) or lp:WaitForChild("PlayerGui") end
-local old = gp:FindFirstChild("VY"); if old then old:Destroy() end
-local oldReopen = gp:FindFirstChild("VY_Reopen"); if oldReopen then oldReopen:Destroy() end
-
-local sg = inst("ScreenGui", { Name = "VY", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 100 }, gp)
-local main = inst("Frame", { Size = UDim2.new(0, 360, 0, 350), Position = UDim2.new(0.5, -180, 0.5, -175), BackgroundColor3 = BG, BackgroundTransparency = 0.25, BorderSizePixel = 0, Visible = false }, sg)
-corner(12, main); stroke(1, LINE, main)
-local bar = inst("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = EL, BackgroundTransparency = 0.4, BorderSizePixel = 0 }, main); corner(12, bar)
-inst("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Font = Enum.Font.GothamBlack, TextSize = 18, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Center, Text = "VY Hub" }, bar)
-local xb = inst("TextButton", { Size = UDim2.new(0, 24, 0, 24), Position = UDim2.new(1, -34, 0, 10), BackgroundColor3 = EL, BackgroundTransparency = 0.3, Text = "X", TextColor3 = MID, Font = Enum.Font.GothamBold, TextSize = 14, BorderSizePixel = 0 }, bar); corner(6, xb)
-
-local list = inst("ScrollingFrame", {
-    Size = UDim2.new(1, -20, 1, -56), Position = UDim2.new(0, 10, 0, 50),
-    BackgroundTransparency = 1, BorderSizePixel = 0,
-    ScrollBarThickness = 3, ScrollBarImageColor3 = LINE,
-    CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-}, main)
-inst("UIListLayout", { Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder }, list)
-
-local sync = {}
-local order = 0
-local function nextOrder() order += 1; return order end
-
-local function toggle(title, get, set)
-    local f = inst("Frame", { LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = EL, BackgroundTransparency = 0.35, BorderSizePixel = 0 }, list); corner(10, f); stroke(1, LINE, f)
-    inst("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.78, -8, 1, 0), Position = UDim2.new(0, 12, 0, 0), Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = title }, f)
-    local sw = inst("Frame", { Size = UDim2.new(0, 44, 0, 22), Position = UDim2.new(1, -56, 0.5, -11), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BackgroundTransparency = 0.2, BorderSizePixel = 0 }, f); corner(11, sw); stroke(1, LINE, sw)
-    local ind = inst("Frame", { Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 3, 0.5, -8), BackgroundColor3 = OFF, BorderSizePixel = 0 }, sw); corner(8, ind)
-    local btn = inst("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "" }, f)
-    local function rf()
-        local on = get()
-        pcall(function()
-            ind.Position = on and UDim2.new(0, 25, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
-            ind.BackgroundColor3 = on and ACC or OFF
-        end)
-    end
-    btn.MouseButton1Click:Connect(function() set(not get()); rf() end)
-    table.insert(sync, rf); rf()
-end
-local function numRow(title, get, set)
-    local f = inst("Frame", { LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = EL, BackgroundTransparency = 0.35, BorderSizePixel = 0 }, list); corner(10, f); stroke(1, LINE, f)
-    inst("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.5, -8, 1, 0), Position = UDim2.new(0, 12, 0, 0), Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = title }, f)
-    local tb = inst("TextBox", { Size = UDim2.new(0.42, -10, 0, 26), Position = UDim2.new(0.54, 0, 0.5, -13), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BackgroundTransparency = 0.3, Text = tostring(get()), TextColor3 = TXT, Font = Enum.Font.Gotham, TextSize = 13, BorderSizePixel = 0, ClearTextOnFocus = false }, f); corner(8, tb); stroke(1, LINE, tb)
-    tb.FocusLost:Connect(function()
-        local v = tonumber(tb.Text)
-        if v then set(v) end
-        tb.Text = tostring(get())
-    end)
-    table.insert(sync, function() if not tb:IsFocused() then tb.Text = tostring(get()) end end)
-end
-local function choiceRow(title, options, get, set)
-    local f = inst("Frame", { LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = EL, BackgroundTransparency = 0.35, BorderSizePixel = 0 }, list); corner(10, f); stroke(1, LINE, f)
-    inst("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.5, -8, 1, 0), Position = UDim2.new(0, 12, 0, 0), Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = title }, f)
-    local b = inst("TextButton", { Size = UDim2.new(0.42, -10, 0, 26), Position = UDim2.new(0.54, 0, 0.5, -13), BackgroundColor3 = Color3.fromRGB(30, 30, 30), BackgroundTransparency = 0.3, Text = tostring(get()), TextColor3 = TXT, Font = Enum.Font.GothamBold, TextSize = 13, BorderSizePixel = 0, AutoButtonColor = false }, f); corner(8, b); stroke(1, LINE, b)
-    local function rf() pcall(function() b.Text = tostring(get()) end) end
-    b.MouseButton1Click:Connect(function()
-        local idx = table.find(options, get()) or 0
-        set(options[idx % #options + 1])
-        rf()
-    end)
-    table.insert(sync, rf)
-end
-
-local setWhiteScreen, setFpsCap
-do
-    local StarterGui = game:GetService("StarterGui")
-    local oldWs = gp:FindFirstChild("VY_White"); if oldWs then oldWs:Destroy() end
-    pcall(function() RunService:Set3dRenderingEnabled(true) end)
-    local wsGui
-
-    local function gameSettings()
-        return UserSettings():GetService("UserGameSettings")
-    end
-
-    setWhiteScreen = function(on)
-        on = on == true
-        if on then
-            if not wsGui or not wsGui.Parent then
-                wsGui = inst("ScreenGui", { Name = "VY_White", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 50, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, gp)
-                inst("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Active = false, Selectable = false }, wsGui)
-            end
-            if not C._wsSaved then
-                local saved = {}
-                pcall(function() saved.quality = settings().Rendering.QualityLevel end)
-                pcall(function() saved.volume = gameSettings().MasterVolume end)
-                pcall(function() saved.topbar = StarterGui:GetCore("TopbarEnabled") end)
-                if type(getfpscap) == "function" then pcall(function() saved.fps = getfpscap() end) end
-                C._wsSaved = saved
-            end
-            pcall(function() RunService:Set3dRenderingEnabled(false) end)
-            pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
-            pcall(function() gameSettings().MasterVolume = 0 end)
-            pcall(function() StarterGui:SetCore("TopbarEnabled", false) end)
-            if type(setfpscap) == "function" then pcall(setfpscap, C.fpsCap) end
-        else
-            if wsGui then pcall(function() wsGui:Destroy() end); wsGui = nil end
-            local stray = gp:FindFirstChild("VY_White"); if stray then pcall(function() stray:Destroy() end) end
-            pcall(function() RunService:Set3dRenderingEnabled(true) end)
-            local saved = C._wsSaved
-            if saved then
-                if saved.quality ~= nil then pcall(function() settings().Rendering.QualityLevel = saved.quality end) end
-                if saved.volume ~= nil then pcall(function() gameSettings().MasterVolume = saved.volume end) end
-                if saved.topbar ~= nil then pcall(function() StarterGui:SetCore("TopbarEnabled", saved.topbar) end) end
-                if type(setfpscap) == "function" then pcall(setfpscap, saved.fps or 0) end
-                C._wsSaved = nil
-            end
-        end
-        C.whiteScreen = on
-    end
-
-    setFpsCap = function(v)
-        v = tonumber(v)
-        if not v then return end
-        C.fpsCap = math.floor(math.clamp(v, 1, 240))
-        if C.whiteScreen and type(setfpscap) == "function" then pcall(setfpscap, C.fpsCap) end
-    end
-
-    table.insert(C._efConns, UIS.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.KeyCode == Enum.KeyCode.L then setWhiteScreen(not C.whiteScreen) end
-    end))
-
-    if C.whiteScreen then setWhiteScreen(true) end
-end
-
-toggle("Auto Boss 6 (teleport)", function() return C.autoBoss end, function(v)
-    if v and C.manorHatch then
-        C.manorHatch = false
-        stopManor()
-    end
-    C.autoBoss = v
-    if v then startBoss() else stopBoss() end
-end)
-numRow("Click Delay (s)", function() return C.bossClickDelay end, function(v)
-    C.bossClickDelay = math.clamp(tonumber(v) or C.bossClickDelay, 0, 3)
-end)
-bossLabel = inst("TextLabel", {
-    LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
-    Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = MID, TextXAlignment = Enum.TextXAlignment.Left,
-    TextTruncate = Enum.TextTruncate.AtEnd, Text = "Boss: idle",
-}, list)
-
-toggle("Break ALL event zones (no TP)", function() return C.breakAll end, function(v) C.breakAll = v end)
-numRow("Delay (s)", function() return C.breakAllDelay end, function(v) C.breakAllDelay = math.max(0.05, tonumber(v) or C.breakAllDelay) end)
-
-toggle("Auto Hatch Manor Egg (TP)", function() return C.manorHatch end, function(v)
-    if v and C.autoBoss then
-        C.autoBoss = false
-        stopBoss()
-    end
-    C.manorHatch = v
-    if v then startManor() else stopManor() end
-end)
-numRow("Hatch Amount (0=max)", function() return C.manorAmount end, function(v)
-    v = math.max(0, math.floor(v))
-    local egg = getZoneRoot() and manorFindEgg() or nil
-    local max = manorMaxHatch(egg)
-    if max and v > max then
-        v = max
-        manorSetStatus(("Manor: capped to your max hatch (%d)"):format(max))
-    end
-    C.manorAmount = v
-end)
-manorLabel = inst("TextLabel", {
-    LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
-    Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = MID, TextXAlignment = Enum.TextXAlignment.Left,
-    TextTruncate = Enum.TextTruncate.AtEnd, Text = "Manor: idle",
-}, list)
-
-toggle("Auto Knock Doors (unlocked)", function() return C.autoKnock end, function(v)
-    C.autoKnock = v
-    if v and bossScanCircles then pcall(bossScanCircles) end
-end)
-toggle("Auto Buy Houses (in order)", function() return C.autoBuyHouses end, function(v) C.autoBuyHouses = v end)
-choiceRow("Door Move Method", { "Teleport", "Walk" }, function() return C.doorsMethod end, function(v)
-    C.doorsMethod = v == "Walk" and "Walk" or "Teleport"
-end)
-doorsLabel = inst("TextLabel", {
-    LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
-    Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = MID, TextXAlignment = Enum.TextXAlignment.Left,
-    TextTruncate = Enum.TextTruncate.AtEnd, Text = "Doors: idle",
-}, list)
-
-toggle("Auto Efficient Farm", function() return C.efficientFarm end, function(v)
-    if v then
-        if not installEfficientFarm() then
-            log("Auto Efficient Farm unavailable (couldn't load Network/MapCmds)")
-            v = false
-        elseif not installPetSpeed() then
-            log("Auto Efficient Farm: pet speed hook unavailable, farming without the speed boost")
-        end
-    end
-    C.efficientFarm = v
-end)
-toggle("Infinite Pet Speed", function() return C.petSpeed end, function(v)
-    if v and not installPetSpeed() then
-        log("Infinite Pet Speed unavailable (hookfunction or PlayerPet missing)")
-        v = false
-    end
-    C.petSpeed = v
-end)
-toggle("Super Magnet", function() return C.superMagnet end, function(v)
-    if v and not installMagnet() then
-        log("Super Magnet unavailable (couldn't patch the client modules)")
-        v = false
-    end
-    C.superMagnet = v
-end)
-
-toggle("Anti AFK", function() return C.antiAfk end, function(v) C.antiAfk = v end)
-toggle("White Screen (CPU saver)", function() return C.whiteScreen end, function(v) setWhiteScreen(v) end)
-numRow("FPS Cap (1-240)", function() return C.fpsCap end, setFpsCap)
-
-do
-    local HttpService = game:GetService("HttpService")
-    local CFG_FILE = "VYHub_Config.json"
-
-    local function readConfig()
-        if type(isfile) ~= "function" or type(readfile) ~= "function" then return nil end
-        local okE, exists = pcall(isfile, CFG_FILE)
-        if not okE or not exists then return nil end
-        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CFG_FILE)) end)
-        if ok and type(data) == "table" then return data end
-        return nil
-    end
-
-    local function saveConfig()
-        if type(writefile) ~= "function" then return false end
-        return (pcall(function()
-            writefile(CFG_FILE, HttpService:JSONEncode({
-                autoBoss = C.autoBoss == true,
-                breakAll = C.breakAll == true,
-                breakAllDelay = C.breakAllDelay,
-                efficientFarm = C.efficientFarm == true,
-                petSpeed = C.petSpeed == true,
-                superMagnet = C.superMagnet == true,
-                antiAfk = C.antiAfk ~= false,
-                manorHatch = C.manorHatch == true,
-                manorAmount = C.manorAmount,
-                autoKnock = C.autoKnock == true,
-                autoBuyHouses = C.autoBuyHouses == true,
-                doorsMethod = C.doorsMethod,
-                bossClickDelay = C.bossClickDelay,
-                whiteScreen = C.whiteScreen == true,
-                fpsCap = C.fpsCap,
-            }))
-        end))
-    end
-
-    local saveRow = inst("Frame", { LayoutOrder = nextOrder(), Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = EL, BackgroundTransparency = 0.35, BorderSizePixel = 0 }, list); corner(10, saveRow); stroke(1, LINE, saveRow)
-    local saveBtn = inst("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = TXT, Text = "Save Config" }, saveRow)
-    saveBtn.MouseButton1Click:Connect(function()
-        saveBtn.Text = saveConfig() and "Config Saved" or "Save Failed"
-        task.delay(1.5, function() pcall(function() saveBtn.Text = "Save Config" end) end)
-    end)
-
-    local cfg = readConfig()
-    local resumeManor = cfg ~= nil and cfg.manorHatch == true and cfg.autoBoss ~= true
-    if not resumeManor then
-        manorRestoreEggs()
-        if C._eggAnimOrig ~= nil then manorSetAnimations(false) end
-    end
-    if cfg then
-        if type(cfg.breakAll) == "boolean" then C.breakAll = cfg.breakAll end
-        if tonumber(cfg.breakAllDelay) then C.breakAllDelay = math.max(0.05, tonumber(cfg.breakAllDelay)) end
-        if type(cfg.efficientFarm) == "boolean" then C.efficientFarm = cfg.efficientFarm end
-        if type(cfg.petSpeed) == "boolean" then C.petSpeed = cfg.petSpeed end
-        if type(cfg.superMagnet) == "boolean" then C.superMagnet = cfg.superMagnet end
-        if type(cfg.antiAfk) == "boolean" then C.antiAfk = cfg.antiAfk end
-        if tonumber(cfg.fpsCap) then setFpsCap(cfg.fpsCap) end
-        if type(cfg.whiteScreen) == "boolean" and cfg.whiteScreen ~= C.whiteScreen then setWhiteScreen(cfg.whiteScreen) end
-        local manorAmt = tonumber(cfg.manorAmount)
-        if manorAmt and manorAmt >= 0 then C.manorAmount = math.floor(manorAmt) end
-        if tonumber(cfg.bossClickDelay) then C.bossClickDelay = math.clamp(tonumber(cfg.bossClickDelay), 0, 3) end
-        if type(cfg.autoKnock) == "boolean" then C.autoKnock = cfg.autoKnock end
-        if type(cfg.autoBuyHouses) == "boolean" then C.autoBuyHouses = cfg.autoBuyHouses end
-        if cfg.doorsMethod == "Walk" or cfg.doorsMethod == "Teleport" then C.doorsMethod = cfg.doorsMethod end
-        if cfg.autoBoss == true then
-            C.autoBoss = true
-            startBoss()
-        elseif cfg.manorHatch == true then
-            C.manorHatch = true
-            startManor()
-        end
-        for _, rf in ipairs(sync) do pcall(rf) end
-    end
-end
-
-hubReady = true
-
-if C.petSpeed and not installPetSpeed() then C.petSpeed = false end
-if C.efficientFarm then
-    task.spawn(function()
-        if not installEfficientFarm() then C.efficientFarm = false; return end
-        installPetSpeed()
-    end)
-end
-if C.superMagnet and not installMagnet() then C.superMagnet = false end
-
-local reopen = inst("ScreenGui", { Name = "VY_Reopen", ResetOnSpawn = false, DisplayOrder = 99 }, gp)
-local rb = inst("TextButton", { Size = UDim2.new(0, 58, 0, 40), Position = UDim2.new(0, 20, 0.5, -20), BackgroundColor3 = BG, BackgroundTransparency = 0.25, Text = "VY", TextColor3 = TXT, Font = Enum.Font.GothamBlack, TextSize = 16, BorderSizePixel = 0, Visible = true }, reopen); corner(10, rb); stroke(1, LINE, rb)
-do
-    local rbd, rbs, rbp, rbm = false, nil, nil, false
-    rb.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then rbd = true; rbm = false; rbs = i.Position; rbp = rb.Position end end)
-    UIS.InputChanged:Connect(function(i) if rbd and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then local d = i.Position - rbs; if d.Magnitude > 4 then rbm = true end; rb.Position = UDim2.new(rbp.X.Scale, rbp.X.Offset + d.X, rbp.Y.Scale, rbp.Y.Offset + d.Y) end end)
-    UIS.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then rbd = false end end)
-    rb.MouseButton1Click:Connect(function() if rbm then return end; main.Visible = true; rb.Visible = false end)
-end
-xb.MouseButton1Click:Connect(function() main.Visible = false; rb.Visible = true end)
-do
-    local drag, ds, sp
-    bar.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = true; ds = i.Position; sp = main.Position end end)
-    UIS.InputChanged:Connect(function(i) if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then local d = i.Position - ds; main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y) end end)
-    UIS.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = false end end)
-end
-
+------------------------------------------------------------------
+-- เริ่มต้น
+------------------------------------------------------------------
+refresh()
+if config.fpsBoost then applyBoost(true) end
+if config.no3d then apply3D(true) end
 task.spawn(function()
-    while alive() do
-        for _, rf in ipairs(sync) do pcall(rf) end
-        task.wait(0.5)
-    end
+	if config.skipAnim then
+		for _ = 1, 10 do
+			if disableAnimation() > 0 then break end
+			task.wait(1)
+		end
+		if Variables then pcall(function() Variables.OpeningEgg = 0 end) end
+	end
+	refresh()
+	if config.running then
+		setRunning(true)
+	elseif config.autoJoin then
+		prepare()
+	end
 end)
-
-task.spawn(function()
-    if not C.autoJoin then return end
-    task.wait(2)
-
-    local mod = clientModule("InstancingCmds", 30)
-    if not mod then log("Auto-join: InstancingCmds not found"); return end
-    local ok, I = pcall(require, mod)
-    if not ok or type(I) ~= "table" or type(I.Enter) ~= "function" then
-        log("Auto-join: InstancingCmds unavailable")
-        return
-    end
-
-    for attempt = 1, 3 do
-        if not alive() then return end
-        if getZoneRoot() then log("Already inside HatchWar"); return end
-
-        log("Joining HatchWar (attempt " .. attempt .. ")")
-        setIdentity(2)
-        local okE, err = pcall(I.Enter, "HatchWar")
-        setIdentity(7)
-        if not okE then log("Auto-join error:", err) end
-
-        local t = os.clock()
-        while alive() and os.clock() - t < 15 do
-            if getZoneRoot() then log("Joined HatchWar"); return end
-            task.wait(0.5)
-        end
-    end
-    log("Auto-join: couldn't confirm HatchWar entry")
-end)
-
-log("VY loaded.")
-return true
