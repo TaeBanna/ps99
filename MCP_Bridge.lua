@@ -4,12 +4,14 @@
 --// วิธีใช้: รันใน executor
 --//   loadstring(game:HttpGet("https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"))()
 --// เปลี่ยน port:   getgenv().MCP_BRIDGE_URL = "http://127.0.0.1:8765"  (ตั้งก่อน loadstring)
+--// ต่อจากมือถือ: getgenv().MCP_BRIDGE_URL = "http://<IP ของ PC>:8765"; getgenv().MCP_BRIDGE_TOKEN = "<รหัส>"
 --// หยุด:           getgenv().MCPBridgeStop()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local genv = (getgenv and getgenv()) or shared
 local BASE_URL = genv.MCP_BRIDGE_URL or "http://127.0.0.1:8765"
+local TOKEN = genv.MCP_BRIDGE_TOKEN -- ต้องตรงกับ ROBLOX_MCP_TOKEN ของ server (ใช้ตอนต่อจากมือถือ)
 
 local httpRequest = (syn and syn.request) or request or http_request
 	or (http and http.request) or (fluxus and fluxus.request)
@@ -72,6 +74,7 @@ end
 
 local function post(path, tbl)
 	tbl.clientId = clientId
+	tbl.token = TOKEN
 	local ok, res = pcall(httpRequest, {
 		Url = BASE_URL .. path,
 		Method = "POST",
@@ -80,6 +83,7 @@ local function post(path, tbl)
 	})
 	if not ok or type(res) ~= "table" then return nil, tostring(res) end
 	local code = res.StatusCode or res.Status or 0
+	if code == 403 then return nil, "token ไม่ถูกต้อง (เช็ก MCP_BRIDGE_TOKEN)" end
 	if code ~= 200 then return nil, "HTTP " .. tostring(code) end
 	local dok, data = pcall(HttpService.JSONDecode, HttpService, res.Body or "")
 	return dok and data or {}, nil

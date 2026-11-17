@@ -19,6 +19,22 @@ const path = require("path");
 
 const PORT = Number(process.env.ROBLOX_MCP_PORT || 8765);
 const HOST = process.env.ROBLOX_MCP_HOST || "127.0.0.1";
+const TOKEN = process.env.ROBLOX_MCP_TOKEN || "";
+const IS_LOOPBACK = ["127.0.0.1", "localhost", "::1"].includes(HOST);
+if (!IS_LOOPBACK && !TOKEN) {
+	process.stderr.write("[roblox-mcp] เปิดให้เครื่องอื่นต่อได้ (ROBLOX_MCP_HOST=" + HOST + ") ต้องตั้ง ROBLOX_MCP_TOKEN ด้วย\n");
+	process.exit(1);
+}
+
+// IP ในวง LAN ของเครื่องนี้ (เอาไปใส่ในมือถือ)
+function lanUrls() {
+	if (IS_LOOPBACK) return [`http://127.0.0.1:${PORT}`];
+	const out = [];
+	for (const list of Object.values(require("os").networkInterfaces())) {
+		for (const a of list || []) if (a.family === "IPv4" && !a.internal) out.push(`http://${a.address}:${PORT}`);
+	}
+	return out;
+}
 const BASE_DIR = path.resolve(process.env.ROBLOX_MCP_ROOT || path.join(__dirname, ".."));
 const POLL_HOLD_MS = 10000;     // poll ค้างรอคำสั่งได้นานสุดเท่านี้
 const CLIENT_STALE_MS = 30000;  // ไม่ poll มานานเกินนี้ = ถือว่าหลุด
@@ -123,6 +139,7 @@ const httpServer = http.createServer(async (req, res) => {
 	if (req.method !== "POST") return json(res, 404, { error: "not found" });
 
 	const body = await readBody(req);
+	if (TOKEN && body.token !== TOKEN) return json(res, 403, { error: "token ไม่ถูกต้อง" });
 	const clientId = String(body.clientId || "default");
 	const c = getClient(clientId);
 	c.lastSeen = Date.now();
@@ -167,7 +184,7 @@ const httpServer = http.createServer(async (req, res) => {
 httpServer.on("error", (e) => {
 	log(`HTTP server error: ${e.message}` + (e.code === "EADDRINUSE" ? ` (port ${PORT} ถูกใช้อยู่ — มี server ตัวอื่นรันอยู่แล้ว? ตั้ง ROBLOX_MCP_PORT ใหม่ได้)` : ""));
 });
-httpServer.listen(PORT, HOST, () => log(`listening on http://${HOST}:${PORT}  (root: ${BASE_DIR})`));
+httpServer.listen(PORT, HOST, () => log(`listening on ${lanUrls().join(" , ")}  (root: ${BASE_DIR})`));
 
 // ------------------------------------------------------------------
 // MCP tools
@@ -273,7 +290,7 @@ async function callTool(name, args = {}) {
 				lastSeenSecAgo: c.lastSeen ? Math.round((now - c.lastSeen) / 1000) : null,
 				...c.info,
 			}));
-			return text(JSON.stringify({ port: PORT, root: BASE_DIR, latestLogSeq: logSeq, clients: rows }, null, 2));
+			return text(JSON.stringify({ bridgeUrls: lanUrls(), tokenRequired: !!TOKEN, root: BASE_DIR, latestLogSeq: logSeq, clients: rows }, null, 2));
 		}
 		case "roblox_execute": {
 			if (typeof args.code !== "string") return text("ต้องใส่ code", true);

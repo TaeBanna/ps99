@@ -41,6 +41,27 @@ Claude Code / Claude Desktop  ──MCP (stdio)──  mcp-bridge/server.js  ─
    - "ดูว่าใน workspace.__THINGS.Plots มีอะไรบ้าง"
    - "เช็กว่า remote CustomEggs_Hatch รับ argument อะไร"
 
+## รันเกมบนมือถือ + Claude Code บน PC
+
+มือถือกับ PC ต้องอยู่ **Wi-Fi วงเดียวกัน**
+
+1. หา IP ของ PC: เปิด cmd พิมพ์ `ipconfig` ดูบรรทัด `IPv4 Address` เช่น `192.168.1.10`
+2. เพิ่ม MCP แบบเปิดรับจาก LAN พร้อมตั้งรหัส (เปลี่ยน `mysecret123` เป็นรหัสของคุณเอง)
+   ```
+   claude mcp remove roblox
+   claude mcp add roblox -e ROBLOX_MCP_HOST=0.0.0.0 -e ROBLOX_MCP_TOKEN=mysecret123 -- node C:\ps99\mcp-bridge\server.js
+   ```
+3. เปิด Claude Code ถ้า Windows Firewall เด้งถาม ให้กด **Allow** (Private network)
+4. ในมือถือ ทดสอบโดยเปิดเบราว์เซอร์ไปที่ `http://192.168.1.10:8765` ต้องเห็น `{"ok":true,...}`
+5. รันใน executor บนมือถือ
+   ```lua
+   getgenv().MCP_BRIDGE_URL = "http://192.168.1.10:8765"
+   getgenv().MCP_BRIDGE_TOKEN = "mysecret123"
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"))()
+   ```
+
+ถ้าเปิด `http://IP:8765` จากมือถือไม่ขึ้น ให้เช็ก firewall หรือดูว่า Wi-Fi ปิด "client isolation" ไว้หรือเปล่า (Wi-Fi สาธารณะ/hotspot บางที่ไม่ให้เครื่องคุยกันเอง)
+
 ## Tools ที่ Claude ใช้ได้
 
 | tool | ทำอะไร |
