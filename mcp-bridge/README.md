@@ -3,62 +3,71 @@
 ให้ Claude ควบคุมเกมได้เหมือนคุณกดรันเอง: รันสคริปต์, อ่าน console, ดูค่าทุกอย่างในเกม
 แล้วแก้โค้ด → รันใหม่ → ดู error เองจนกว่าจะใช้ได้
 
-เชื่อมต่อด้วย **รหัส 6 หลัก** อย่างเดียว ไม่ต้องหา IP
+**ใช้ผ่านอินเทอร์เน็ต** — มือถือกับ PC อยู่คนละ Wi-Fi หรือใช้เน็ตมือถือก็ได้
+เชื่อมต่อด้วยรหัส 6 หลักครั้งเดียว ครั้งต่อไปต่อเองอัตโนมัติ
+
+```
+มือถือ (MCP_Bridge.lua) ──https──► Supabase relay ◄──https── PC (Claude Code + server.js)
+```
 
 ## ติดตั้งบน PC (ครั้งเดียว)
 
 1. ลง [Node.js](https://nodejs.org) (เวอร์ชัน 18 ขึ้นไป)
 2. clone repo นี้ลงเครื่อง เช่น `C:\ps99`
-3. เปิด cmd ในโฟลเดอร์ repo แล้วพิมพ์
+3. เพิ่ม MCP ให้ Claude Code
    ```
+   claude mcp remove roblox
    claude mcp add roblox -- node C:\ps99\mcp-bridge\server.js
    ```
-   (ถ้าเคยเพิ่มแบบเก่าไว้ ให้ `claude mcp remove roblox` ก่อน)
-4. เปิด `claude` ครั้งแรก ถ้า Windows Firewall เด้งถาม ให้กด **Allow** (Private network)
+4. เปิด `claude` แล้วพิมพ์: **"ตั้งค่า roblox bridge ด้วย setup code XXXXXX-XXXXXX-XXXXXX-XXXXXX"**
+   (setup code ได้จากตอนติดตั้ง ใช้ได้ครั้งเดียว)
+   → เครื่องจะสร้างกุญแจเจ้าของเก็บไว้ที่ `~/.claude-roblox-bridge.json` (อย่าแชร์ไฟล์นี้)
 
-## เชื่อมต่อ
+## เชื่อมเกม
 
-1. ใน Claude Code พิมพ์: **"ขอรหัสเชื่อมต่อ roblox"** → ได้รหัส 6 หลัก
+1. ใน Claude Code พิมพ์: **"ขอรหัสเชื่อมต่อ roblox"** → ได้รหัส 6 หลัก (หมดอายุ 10 นาที)
 2. ในเกมรัน
    ```lua
    loadstring(game:HttpGet("https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"))()
    ```
 3. พิมพ์รหัสในหน้าต่าง **Claude Bridge** → กด **เชื่อมต่อ** → จุดเขียว = เสร็จ
 
-ครั้งต่อไปแค่รันสคริปต์ มันจะต่อเองอัตโนมัติ (ไม่ต้องใส่รหัส) ย้ายเซิร์ฟ/รีจอยก็ต่อเอง
-
-> มือถือต้องอยู่ **Wi-Fi เดียวกับ PC** สคริปต์จะสแกนหา PC ให้เอง
-> ถ้าหาไม่เจอ ให้ถาม Claude ว่า IP ของ PC คืออะไร แล้วใส่ในช่อง "IP ของ PC"
+ครั้งต่อไปแค่รันสคริปต์ มันต่อเองอัตโนมัติ ย้ายเซิร์ฟ/รีจอยก็ต่อเอง
 
 ## ความปลอดภัย
 
-- รหัส 6 หลักใช้ได้ **ครั้งเดียว** พอจับคู่แล้วจะเปลี่ยนเป็นกุญแจลับยาว 64 ตัวที่เก็บไว้ในเครื่องคุณกับในเกมเท่านั้น
-- ใส่รหัสผิด 5 ครั้ง → รหัสเปลี่ยนใหม่ทันที, โดนเดาบ่อยๆ → พักการจับคู่ 1 นาที (สุ่มเดาไม่มีทางทัน)
-- ไม่ผ่านเซิร์ฟเวอร์ภายนอก คุยกันตรงๆ ในวง Wi-Fi บ้านคุณ
-- ยกเลิกการจับคู่ทุกเครื่อง: บอก Claude ว่า "ยกเลิกการจับคู่ roblox ทั้งหมด" หรือกดปุ่ม "ยกเลิกการเชื่อมต่อ" ในเกม
+- **ไม่มี API key หรือข้อมูลลับใน repo** — `MCP_Bridge.lua` และ `server.js` มีแค่ที่อยู่ของ relay
+  ซึ่งรู้ไปก็ทำอะไรไม่ได้ถ้าไม่มีกุญแจ
+- กุญแจเจ้าของสร้างบน PC ของคุณเอง ไม่เคยผ่านแชทหรือ GitHub — relay เก็บแค่ hash (SHA-256)
+- token ของเกมได้จากการจับคู่เท่านั้น เก็บในเครื่องที่รันเกม relay เก็บแค่ hash
+- รหัส 6 หลักออกได้เฉพาะ PC ที่มีกุญแจเจ้าของ, หมดอายุ 10 นาที, ใช้ได้ครั้งเดียว, ผิด 5 ครั้งรหัสถูกยกเลิก
+- ตารางใน Supabase เปิด RLS และไม่มี policy → เข้าผ่าน API ปกติไม่ได้เลย ใช้ได้เฉพาะ Edge Function
+- ข้อความในตัวกลางถูกลบทันทีที่ส่งถึง (ที่ค้างเกิน 15 นาทีถูกลบอัตโนมัติ)
+- ยกเลิกการจับคู่ทุกเครื่อง: บอก Claude "ยกเลิกการจับคู่ roblox ทั้งหมด" หรือกดปุ่มในเกม
 
 ## สิ่งที่ Claude ทำได้
 
 | tool | ทำอะไร |
 |---|---|
+| `roblox_setup` | ตั้งค่าเครื่องครั้งแรกด้วย setup code |
 | `roblox_pair` | ขอรหัสจับคู่ / ยกเลิกการจับคู่ |
-| `roblox_status` | ดูว่าเกมเชื่อมต่ออยู่ไหม (ผู้เล่น, PlaceId, JobId, executor) |
+| `roblox_status` | ดูว่าเกมเชื่อมต่ออยู่ไหม (ผู้เล่น, PlaceId, JobId, executor, มือถือ/PC) |
 | `roblox_execute` | รันโค้ด Luau อะไรก็ได้ในเกม ได้ผล print / return / error+traceback กลับมา |
-| `roblox_run_file` | รันไฟล์ `.lua` ในเครื่องตรงๆ (เช่น `AutoEgg_GUI.lua` ที่เพิ่งแก้ ไม่ต้อง push ก่อน) |
-| `roblox_get_logs` | อ่าน console (print/warn/error จากทุกสคริปต์ รวมของเกมเอง) |
+| `roblox_run_file` | รันไฟล์ `.lua` ในเครื่องตรงๆ (ไม่ต้อง push ก่อน) |
+| `roblox_get_logs` | อ่าน console (print/warn/error ทุกสคริปต์) |
 | `roblox_get_tree` | ดู Instance แบบ Explorer พร้อม Value และ Attributes |
-| `roblox_inspect` | ดู property / attribute / tag ของ Instance และ `require` ModuleScript มาดูข้อมูลข้างใน |
+| `roblox_inspect` | ดู property / attribute / tag และ `require` ModuleScript |
 
-ตัวอย่างคำสั่ง:
-- "รัน AutoEgg_GUI.lua แล้วดู error ใน console แก้ให้จนใช้ได้"
-- "ดูว่าใน Workspace.__THINGS.Plots มีอะไร plot ไหนเป็นของเรา"
-- "require ReplicatedStorage.Library.Client.Save แล้วดูว่ามีเพ็ทอะไรบ้าง"
+## Supabase (relay)
+
+- project: `claude-roblox-bridge` (Singapore) แยกจากแอปอื่น
+- โค้ด Edge Function: [`supabase/claude-bridge/index.ts`](supabase/claude-bridge/index.ts) (deploy ด้วย verify_jwt = false เพราะยืนยันตัวตนเอง)
+- แพ็กฟรี: 500,000 ครั้ง/เดือน — เกมเช็กห่างๆ ตอน Claude ปิดอยู่ และส่ง log เฉพาะตอน Claude เปิด
+- project ฟรีถูกพักถ้าไม่มีการใช้งาน 7 วัน → เข้า dashboard กด Resume
 
 ## ปัญหาที่พบบ่อย
 
-- **หา PC ไม่เจอ**: เช็กว่าเปิด Claude Code อยู่ (server รันเฉพาะตอน Claude เปิด), อยู่ Wi-Fi เดียวกัน,
-  Firewall อนุญาต Node แล้ว — ทดสอบโดยเปิดเบราว์เซอร์มือถือไปที่ `http://<IP ของ PC>:8765` ต้องเห็น `{"ok":true,...}`
-- **Wi-Fi สาธารณะ / hotspot บางที่** ไม่ให้เครื่องคุยกันเอง (client isolation) ใช้ไม่ได้
-- **port ชน (EADDRINUSE)**: มี Claude อีกหน้าต่างเปิด bridge อยู่แล้ว ใช้หน้าต่างนั้น หรือปิดก่อน
-- **เกมค้างตอนสแกน**: executor บางตัวทำ HTTP แบบไม่ yield ให้ใส่ IP ของ PC ในช่อง IP แทนการสแกน
+- **"รอ Claude บน PC เปิด"**: เปิด `claude` บน PC (server ทำงานเฉพาะตอน Claude เปิด)
+- **ต่อเน็ตไม่ได้**: executor ต้องมี `request`/`http_request` และอนุญาต https
+- **ลืม/ทำกุญแจเจ้าของหาย**: ต้องรีเซ็ตใน Supabase แล้วขอ setup code ใหม่
 - หยุด bridge ในเกม: `getgenv().MCPBridgeStop()`

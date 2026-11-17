@@ -5,22 +5,18 @@
 --//   2. รันใน executor:
 --//      loadstring(game:HttpGet("https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"))()
 --//   3. พิมพ์รหัส 6 หลักในหน้าต่าง Claude Bridge -> เสร็จ
---//   ครั้งต่อไปต่อเองอัตโนมัติ ไม่ต้องใส่รหัส (มือถือต้องอยู่ Wi-Fi เดียวกับ PC)
+--//   ครั้งต่อไปต่อเองอัตโนมัติ ไม่ต้องใส่รหัส ใช้ได้ทุกเน็ต (ต่าง Wi-Fi / เน็ตมือถือ)
+--//
+--// ไฟล์นี้ไม่มี API key หรือข้อมูลลับใดๆ — มีแค่ที่อยู่ของ relay
+--// token ที่ได้จากการจับคู่ถูกเก็บไว้ในเครื่องที่รันเกมเท่านั้น (ClaudeBridge.json)
 --//
 --// หยุด: getgenv().MCPBridgeStop()
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local SCRIPT_URL = "https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"
-local PORT = 8765
+local RELAY_URL = "https://iutqukkvewkyzwpwyjee.supabase.co/functions/v1/claude-bridge"
 local SAVE_FILE = "ClaudeBridge.json"
--- วง Wi-Fi ที่จะสแกนหา PC (เรียงตามที่เจอบ่อย) ใส่เพิ่มได้ด้วย getgenv().MCP_SUBNETS = {"192.168.50"}
-local DEFAULT_SUBNETS = {
-	"192.168.1", "192.168.0", "192.168.137", "192.168.2", "192.168.100", "192.168.3",
-	"192.168.4", "192.168.5", "192.168.8", "192.168.10", "192.168.11", "192.168.88",
-	"192.168.31", "192.168.43", "192.168.68", "192.168.178", "10.0.0", "10.0.1", "10.1.1",
-	"172.16.0", "172.20.10",
-}
 
 local genv = (getgenv and getgenv()) or shared
 
@@ -118,87 +114,21 @@ local function encode(tbl)
 end
 
 -- คืน: data, statusCode (0 = ต่อไม่ได้), errorText
-local function rawPost(url, path, tbl)
+local function relay(action, tbl)
+	tbl = tbl or {}
+	tbl.action = action
 	local ok, res = pcall(httpRequest, {
-		Url = url .. path,
+		Url = RELAY_URL,
 		Method = "POST",
 		Headers = { ["Content-Type"] = "application/json" },
 		Body = encode(tbl),
 	})
-	if not ok or type(res) ~= "table" then return nil, 0, tostring(res) end
+	if not ok or type(res) ~= "table" then return nil, 0, "ต่อเน็ตไม่ได้: " .. tostring(res) end
 	local code = tonumber(res.StatusCode or res.Status) or 0
 	local dok, data = pcall(HttpService.JSONDecode, HttpService, res.Body or "")
 	data = dok and type(data) == "table" and data or {}
 	if code ~= 200 then return nil, code, data.error or ("HTTP " .. code) end
 	return data, 200
-end
-
-local function isBridge(url)
-	local ok, res = pcall(httpRequest, { Url = url .. "/", Method = "GET" })
-	if not ok or type(res) ~= "table" then return nil end
-	local dok, data = pcall(HttpService.JSONDecode, HttpService, res.Body or "")
-	if dok and type(data) == "table" and data.name == "roblox-mcp-bridge" then return data end
-	return nil
-end
-
-------------------------------------------------------------------
--- หา PC ในวง Wi-Fi
-------------------------------------------------------------------
-local function hostOf(url)
-	return url and url:match("^https?://([^:/]+)")
-end
-
--- เช็กหลาย url พร้อมกัน คืน url แรกๆ ที่เป็น bridge (รอไม่เกิน timeout)
-local function probeMany(urls, timeout)
-	local found, finished = {}, 0
-	for _, url in ipairs(urls) do
-		task.spawn(function()
-			if isBridge(url) then found[#found + 1] = url end
-			finished = finished + 1
-		end)
-	end
-	local t0 = tick()
-	while alive and #found == 0 and finished < #urls and tick() - t0 < timeout do task.wait(0.1) end
-	return found
-end
-
--- onProgress(text) ใช้แสดงสถานะใน GUI
-local function discover(manualHost, savedUrl, onProgress)
-	local quick = {}
-	local function addQuick(host)
-		if not host or host == "" then return end
-		local url = host:find("://") and host or ("http://" .. host .. (host:find(":") and "" or (":" .. PORT)))
-		for _, u in ipairs(quick) do if u == url then return end end
-		quick[#quick + 1] = url
-	end
-	addQuick(manualHost)
-	addQuick(hostOf(savedUrl))
-	addQuick("127.0.0.1") -- เล่นบน PC เครื่องเดียวกัน
-	if genv.MCP_BRIDGE_URL then addQuick(genv.MCP_BRIDGE_URL) end
-
-	onProgress("กำลังหา PC...")
-	local found = probeMany(quick, 4)
-	if #found > 0 then return found end
-	if manualHost and manualHost ~= "" then return {} end -- ใส่ IP มาเองแล้วไม่เจอ ไม่ต้องสแกน
-
-	local subnets, seen = {}, {}
-	local function addSubnet(s)
-		if s and not seen[s] then seen[s] = true subnets[#subnets + 1] = s end
-	end
-	local savedHost = hostOf(savedUrl)
-	addSubnet(savedHost and savedHost:match("^(%d+%.%d+%.%d+)%.%d+$"))
-	for _, s in ipairs(genv.MCP_SUBNETS or {}) do addSubnet(s) end
-	for _, s in ipairs(DEFAULT_SUBNETS) do addSubnet(s) end
-
-	for i, subnet in ipairs(subnets) do
-		if not alive then break end
-		onProgress(string.format("กำลังสแกน %s.x  (%d/%d)", subnet, i, #subnets))
-		local urls = {}
-		for h = 1, 254 do urls[#urls + 1] = string.format("http://%s.%d:%d", subnet, h, PORT) end
-		found = probeMany(urls, 4)
-		if #found > 0 then return found end
-	end
-	return {}
 end
 
 ------------------------------------------------------------------
@@ -469,13 +399,18 @@ end
 ------------------------------------------------------------------
 -- การเชื่อมต่อ
 ------------------------------------------------------------------
-local conn = { url = nil, token = nil, state = "idle", pc = nil } -- state: idle | searching | connected | lost
+local conn = { token = nil, state = "idle" } -- state: idle | searching | connected | lost
 local setStatus -- จาก GUI
+local pcOnline = false
 
-local function post(path, tbl)
-	tbl.clientId = clientId
-	tbl.token = conn.token
-	return rawPost(conn.url, path, tbl)
+local function send(messages)
+	return relay("game_send", { token = conn.token, clientId = clientId, messages = messages })
+end
+
+local function takeLogs()
+	local batch = logBuffer
+	logBuffer = {}
+	return batch
 end
 
 local function runCommand(cmd)
@@ -486,43 +421,45 @@ local function runCommand(cmd)
 	end)
 	if not ok then res = { ok = false, error = "bridge error: " .. tostring(res) } end
 	res.id = cmd.id
-	for _ = 1, 3 do -- ส่งผลกลับ ลองซ้ำถ้าพลาด
-		local _, code = post("/result", res)
+	res.kind = "result"
+	-- ส่งผลพร้อม log ล่าสุด (Claude เห็น console ทันทีหลังรัน)
+	local msgs = { res }
+	if #logBuffer > 0 then msgs[2] = { kind = "logs", entries = takeLogs() } end
+	for _ = 1, 3 do
+		local _, code = send(msgs)
 		if code == 200 then break end
 		task.wait(1)
 	end
 end
 
 local function forget(reason)
-	conn.token, conn.url, conn.pc = nil, nil, nil
+	conn.token = nil
 	conn.state = "idle"
 	saveSaved(nil)
 	if setStatus then setStatus("idle", reason or "ยังไม่ได้เชื่อมต่อ") end
 end
 
 local connectGen = 0
-local function startSession(url, token, pc)
+local function startSession(token)
 	connectGen = connectGen + 1
 	local gen = connectGen
-	conn.url, conn.token, conn.pc, conn.state = url, token, pc, "connected"
-	saveSaved({ url = url, token = token, pc = pc })
-	setStatus("connected", "เชื่อมต่อกับ " .. tostring(pc or hostOf(url)) .. " แล้ว")
-	print("[Claude] เชื่อมต่อกับ Claude แล้ว (" .. url .. ")")
+	conn.token, conn.state = token, "searching"
+	saveSaved({ token = token })
+	setStatus("searching", "กำลังเชื่อมต่อ...")
 
-	-- ส่ง log
+	-- ส่ง log (เฉพาะตอน Claude บน PC เปิดอยู่ ประหยัดโควตา)
 	task.spawn(function()
 		while alive and gen == connectGen do
-			if conn.state == "connected" and #logBuffer > 0 then
-				local batch = logBuffer
-				logBuffer = {}
-				local _, code = post("/logs", { logs = batch })
+			if pcOnline and #logBuffer > 0 then
+				local batch = takeLogs()
+				local _, code = send({ { kind = "logs", entries = batch } })
 				if code ~= 200 then
 					for i = #batch, 1, -1 do table.insert(logBuffer, 1, batch[i]) end
 					while #logBuffer > 2000 do table.remove(logBuffer, 1) end
-					task.wait(2)
+					task.wait(3)
 				end
 			end
-			task.wait(0.5)
+			task.wait(2)
 		end
 	end)
 
@@ -530,15 +467,25 @@ local function startSession(url, token, pc)
 	task.spawn(function()
 		local fails = 0
 		while alive and gen == connectGen do
-			local data, code, err = post("/poll", { info = info() })
+			local data, code, err = relay("game_poll", { token = conn.token, clientId = clientId, info = info(), wait = 8000 })
 			if not alive or gen ~= connectGen then break end
 			if code == 200 then
-				if conn.state ~= "connected" then
-					conn.state = "connected"
-					setStatus("connected", "เชื่อมต่อกับ " .. tostring(conn.pc or hostOf(conn.url)) .. " แล้ว")
-				end
 				fails = 0
+				pcOnline = data.pcOnline == true
+				conn.state = "connected"
+				if pcOnline then
+					setStatus("connected", "เชื่อมต่อแล้ว — Claude ควบคุมเกมนี้ได้")
+				else
+					setStatus("connected", "พร้อมแล้ว — รอ Claude บน PC เปิด")
+				end
 				for _, cmd in ipairs(data.commands or {}) do task.spawn(runCommand, cmd) end
+				if not pcOnline then
+					-- PC ปิดอยู่: เช็กห่างๆ ประหยัดโควตา
+					for _ = 1, 15 do
+						if not alive or gen ~= connectGen then break end
+						task.wait(1)
+					end
+				end
 			elseif code == 401 then
 				connectGen = connectGen + 1
 				forget("การจับคู่ถูกยกเลิก ใส่รหัสใหม่")
@@ -546,17 +493,9 @@ local function startSession(url, token, pc)
 			else
 				fails = fails + 1
 				conn.state = "lost"
-				setStatus("lost", "หลุดจาก PC กำลังต่อใหม่... (" .. tostring(err) .. ")")
-				if fails >= 4 then
-					-- IP ของ PC อาจเปลี่ยน -> สแกนหาใหม่ด้วย token เดิม
-					local found = discover(nil, conn.url, function(t) setStatus("lost", t) end)
-					for _, u in ipairs(found) do
-						local _, c2 = rawPost(u, "/logs", { clientId = clientId, token = conn.token, logs = {} })
-						if c2 == 200 then conn.url = u saveSaved({ url = u, token = conn.token, pc = conn.pc }) break end
-					end
-					fails = 0
-				end
-				task.wait(math.min(1 + fails, 5))
+				pcOnline = false
+				setStatus("lost", "เน็ตหลุด กำลังต่อใหม่... (" .. tostring(err) .. ")")
+				task.wait(math.min(2 * fails, 15))
 			end
 		end
 	end)
@@ -564,7 +503,7 @@ end
 
 -- จับคู่ด้วยรหัส
 local busy = false
-local function pairWithCode(code, manualHost)
+local function pairWithCode(code)
 	if busy then return end
 	busy = true
 	code = tostring(code or ""):gsub("%D", "")
@@ -573,54 +512,24 @@ local function pairWithCode(code, manualHost)
 		busy = false
 		return
 	end
-	setStatus("searching", "กำลังหา PC...")
-	local saved = loadSaved()
-	local found = discover(manualHost, saved and saved.url, function(t) setStatus("searching", t) end)
-	if #found == 0 then
-		setStatus("idle", "หา PC ไม่เจอ — เช็กว่าเปิด Claude อยู่ และอยู่ Wi-Fi เดียวกัน (หรือใส่ IP ของ PC)")
-		busy = false
-		return
-	end
-	local lastErr
-	for _, url in ipairs(found) do
-		setStatus("searching", "เจอ PC แล้ว กำลังจับคู่...")
-		local data, status, err = rawPost(url, "/pair", { code = code, info = info() })
-		if status == 200 and data.token then
-			busy = false
-			startSession(url, data.token, data.pc)
-			return
-		end
-		lastErr = err
-	end
-	setStatus("idle", tostring(lastErr or "จับคู่ไม่สำเร็จ"))
+	setStatus("searching", "กำลังจับคู่...")
+	local data, status, err = relay("game_pair", { code = code, info = info() })
 	busy = false
+	if status == 200 and data.token then
+		print("[Claude] จับคู่สำเร็จ")
+		startSession(data.token)
+	else
+		setStatus("idle", tostring(err or "จับคู่ไม่สำเร็จ"))
+	end
 end
 
 -- ต่อเองด้วย token ที่เคยจับคู่ไว้
 local function autoConnect()
 	local saved = loadSaved()
-	if not (saved and saved.token) then
+	if saved and saved.token then
+		startSession(saved.token)
+	else
 		setStatus("idle", "ใส่รหัส 6 หลักจาก Claude")
-		return
-	end
-	conn.token = saved.token
-	setStatus("searching", "กำลังต่อกับ PC เดิม...")
-	while alive and conn.state ~= "connected" and conn.token == saved.token do
-		if saved.url then
-			local _, code = rawPost(saved.url, "/logs", { clientId = clientId, token = saved.token, logs = {} })
-			if code == 200 then return startSession(saved.url, saved.token, saved.pc) end
-			if code == 401 then return forget("การจับคู่เดิมใช้ไม่ได้แล้ว ใส่รหัสใหม่") end
-		end
-		local found = discover(nil, saved.url, function(t) setStatus("searching", t) end)
-		for _, u in ipairs(found) do
-			local _, code = rawPost(u, "/logs", { clientId = clientId, token = saved.token, logs = {} })
-			if code == 200 then return startSession(u, saved.token, saved.pc) end
-		end
-		setStatus("searching", "ยังหา PC ไม่เจอ (เปิด Claude ไว้ไหม?) จะลองใหม่เรื่อยๆ — หรือใส่รหัสใหม่")
-		for _ = 1, 10 do
-			if not alive or busy or conn.state == "connected" then return end
-			task.wait(1)
-		end
 	end
 end
 
@@ -664,7 +573,7 @@ make("TextLabel", {
 
 -- หน้าต่างหลัก
 local frame = make("Frame", {
-	Size = UDim2.fromOffset(300, 214), Position = UDim2.new(0.5, -150, 0, 70), BackgroundColor3 = COLORS.bg, Active = true,
+	Size = UDim2.fromOffset(300, 186), Position = UDim2.new(0.5, -150, 0, 70), BackgroundColor3 = COLORS.bg, Active = true,
 }, gui)
 corner(frame, 12)
 make("UIStroke", { Color = COLORS.accent, Thickness = 1.5, Transparency = 0.3 }, frame)
@@ -688,33 +597,27 @@ local statusLabel = make("TextLabel", {
 }, frame)
 
 -- ส่วนใส่รหัส
-local pairBox = make("Frame", { Size = UDim2.new(1, -28, 0, 130), Position = UDim2.fromOffset(14, 76), BackgroundTransparency = 1 }, frame)
+local pairBox = make("Frame", { Size = UDim2.new(1, -28, 0, 100), Position = UDim2.fromOffset(14, 76), BackgroundTransparency = 1 }, frame)
 local codeBox = make("TextBox", {
 	Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = COLORS.panel, Text = "", PlaceholderText = "รหัส 6 หลัก",
 	TextColor3 = COLORS.text, PlaceholderColor3 = COLORS.sub, Font = Enum.Font.GothamBold, TextSize = 26, ClearTextOnFocus = false,
 }, pairBox)
 corner(codeBox, 8)
-local ipBox = make("TextBox", {
-	Size = UDim2.new(1, 0, 0, 30), Position = UDim2.fromOffset(0, 52), BackgroundColor3 = COLORS.panel, Text = "",
-	PlaceholderText = "IP ของ PC (ไม่ต้องใส่ก็ได้)", TextColor3 = COLORS.text, PlaceholderColor3 = COLORS.sub,
-	Font = Enum.Font.Gotham, TextSize = 13, ClearTextOnFocus = false,
-}, pairBox)
-corner(ipBox, 8)
 local connectBtn = make("TextButton", {
-	Size = UDim2.new(1, 0, 0, 38), Position = UDim2.fromOffset(0, 88), BackgroundColor3 = COLORS.accent,
+	Size = UDim2.new(1, 0, 0, 38), Position = UDim2.fromOffset(0, 56), BackgroundColor3 = COLORS.accent,
 	Text = "เชื่อมต่อ", TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 16,
 }, pairBox)
 corner(connectBtn, 8)
 
 -- ส่วนตอนเชื่อมต่อแล้ว
-local connectedBox = make("Frame", { Size = UDim2.new(1, -28, 0, 130), Position = UDim2.fromOffset(14, 76), BackgroundTransparency = 1, Visible = false }, frame)
+local connectedBox = make("Frame", { Size = UDim2.new(1, -28, 0, 100), Position = UDim2.fromOffset(14, 76), BackgroundTransparency = 1, Visible = false }, frame)
 make("TextLabel", {
-	Size = UDim2.new(1, 0, 0, 80), BackgroundTransparency = 1, TextWrapped = true,
-	Text = "Claude ควบคุมเกมนี้ได้แล้ว\nสั่งงานใน Claude Code บน PC ได้เลย\n(ย้ายเซิร์ฟ/รีจอยแล้วจะต่อเองอัตโนมัติ)",
+	Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, TextWrapped = true,
+	Text = "สั่งงานใน Claude Code บน PC ได้เลย\nย้ายเซิร์ฟ/รีจอย จะต่อเองอัตโนมัติ",
 	TextColor3 = COLORS.text, Font = Enum.Font.Gotham, TextSize = 14,
 }, connectedBox)
 local unpairBtn = make("TextButton", {
-	Size = UDim2.new(1, 0, 0, 38), Position = UDim2.fromOffset(0, 88), BackgroundColor3 = COLORS.panel,
+	Size = UDim2.new(1, 0, 0, 38), Position = UDim2.fromOffset(0, 56), BackgroundColor3 = COLORS.panel,
 	Text = "ยกเลิกการเชื่อมต่อ", TextColor3 = COLORS.lost, Font = Enum.Font.GothamBold, TextSize = 15,
 }, connectedBox)
 corner(unpairBtn, 8)
@@ -727,7 +630,7 @@ setStatus = function(state, msg)
 		local isConnected = state == "connected"
 		connectedBox.Visible = isConnected
 		pairBox.Visible = not isConnected
-		connectBtn.Text = state == "searching" and "กำลังเชื่อมต่อ..." or "เชื่อมต่อ"
+		connectBtn.Text = busy and "กำลังจับคู่..." or "เชื่อมต่อ"
 	end)
 end
 
@@ -744,9 +647,9 @@ table.insert(connections, codeBox:GetPropertyChangedSignal("Text"):Connect(funct
 end))
 table.insert(connections, connectBtn.MouseButton1Click:Connect(function()
 	if busy then return end
-	connectGen = connectGen + 1 -- หยุดการต่ออัตโนมัติ/session เก่า
+	connectGen = connectGen + 1 -- หยุด session เก่า
 	conn.state = "idle"
-	task.spawn(pairWithCode, codeBox.Text, ipBox.Text)
+	task.spawn(pairWithCode, codeBox.Text)
 end))
 table.insert(connections, unpairBtn.MouseButton1Click:Connect(function()
 	connectGen = connectGen + 1
@@ -796,8 +699,10 @@ end
 setStatus("idle", "ใส่รหัส 6 หลักจาก Claude")
 task.spawn(function()
 	autoConnect()
-	if conn.state == "connected" then
-		task.wait(2)
-		if alive and conn.state == "connected" then setMinimized(true) end
+	for _ = 1, 30 do
+		if not alive or conn.state == "connected" then break end
+		task.wait(0.5)
 	end
+	task.wait(1.5)
+	if alive and conn.state == "connected" then setMinimized(true) end
 end)
