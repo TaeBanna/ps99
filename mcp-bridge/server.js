@@ -24,6 +24,8 @@ const CONFIG_FILE = path.join(os.homedir(), ".claude-roblox-bridge.json");
 const BASE_DIR = path.resolve(process.env.ROBLOX_MCP_ROOT || path.join(__dirname, ".."));
 const SCRIPT_URL = "https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua";
 const CLIENT_STALE_MS = 45000;
+// Unique per server process: several Claude windows can run the bridge at once without stealing each other's results.
+const INSTANCE = crypto.randomBytes(6).toString("hex");
 const MAX_LOGS = 5000;
 
 const log = (...a) => process.stderr.write("[claude-bridge] " + a.join(" ") + "\n");
@@ -106,7 +108,7 @@ function pickClient(clientId) {
 }
 
 async function sendCommand(clientId, type, payload, timeoutSec) {
-	const id = `${Date.now().toString(36)}-${++cmdSeq}`;
+	const id = `${INSTANCE}~${Date.now().toString(36)}-${++cmdSeq}`;
 	const waitMs = (timeoutSec + 20) * 1000; // เผื่อเวลา network
 	const result = new Promise((resolve) => {
 		const timer = setTimeout(() => {
@@ -131,7 +133,7 @@ async function pollLoop() {
 	let backoff = 1000;
 	for (;;) {
 		if (needSetup()) { await new Promise((r) => setTimeout(r, 500)); continue; }
-		const r = await relay("pc_poll", { owner: config.ownerSecret, wait: 25000 }, 40000);
+		const r = await relay("pc_poll", { owner: config.ownerSecret, wait: 25000, instance: INSTANCE }, 40000);
 		if (r.status === 200) {
 			relayError = null;
 			backoff = 1000;
