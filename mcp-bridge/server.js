@@ -91,9 +91,14 @@ function needSetup() {
 const SETUP_HELP =
 	"ยังไม่ได้ตั้งค่า bridge บนเครื่องนี้ — ให้ผู้ใช้บอก setup code (ได้จากตอนติดตั้ง รูปแบบ XXXXXX-XXXXXX-XXXXXX-XXXXXX) แล้วเรียก roblox_setup";
 
-function pickClient(clientId) {
+async function pickClient(clientId) {
 	if (needSetup()) throw new Error(SETUP_HELP);
-	const live = liveClients();
+	let live = liveClients();
+	// the background long-poll may not have returned yet (e.g. right after startup): ask the relay now
+	if (!live.length || (clientId && !live.find((c) => c.client_id === clientId))) {
+		await pollOnce(0);
+		live = liveClients();
+	}
 	if (clientId) {
 		if (!live.find((c) => c.client_id === clientId)) throw new Error(`client "${clientId}" ไม่ได้เชื่อมต่ออยู่`);
 		return clientId;
@@ -108,55 +113,56 @@ function pickClient(clientId) {
 }
 
 async function sendCommand(clientId, type, payload, timeoutSec) {
-	const id = `${INSTANCE}~${Date.now().toString(36)}-${++cmdSeq}`;
-	const waitMs = (timeoutSec + 20) * 1000; // เผื่อเวลา network
-	const result = new Promise((resolve) => {
-		const timer = setTimeout(() => {
-			pending.delete(id);
-			resolve({ ok: false, error: `ไม่ได้รับผลตอบกลับใน ${timeoutSec + 20} วินาที (เกมหลุด หรือค้าง?)` });
-		}, waitMs);
-		pending.set(id, { resolve, timer });
-	});
-	const r = await relay("pc_send", { owner: config.ownerSecret, to: clientId, body: { id, type, timeout: timeoutSec, ...payload } });
-	if (r.status !== 200) {
-		const p = pending.get(id);
-		if (p) { clearTimeout(p.timer); pending.delete(id); }
-		return { ok: false, error: "ส่งคำสั่งไม่สำเร็จ: " + (r.data.error || r.status) };
-	}
-	return result;
+	// One request: the relay queues the command and waits for its result on a private inbox (fastest path).
+	timeoutSec = Math.min(Math.max(timeoutSec, 1), 120);
+	const id = `${INSTANCE}${crypto.randomBytes(3).toString("hex")}~${++cmdSeq}`;
+	const waitMs = (timeoutSec + 15) * 1000; // network margin
+	const r = await relay("pc_exec", { owner: config.ownerSecret, to: clientId, wait: waitMs, body: { id, type, timeout: timeoutSec, ...payload } }, waitMs + 10000);
+	if (r.status !== 200) return { ok: false, error: "ส่งคำสั่งไม่สำเร็จ: " + (r.data.error || r.status) };
+	return r.data.result || { ok: false, error: `ไม่ได้รับผลตอบกลับใน ${timeoutSec + 15} วินาที (เกมหลุด หรือค้าง?)` };
 }
 
 // ------------------------------------------------------------------
 // poll relay ตลอดเวลา (รับผล / log / สถานะเกม)
 // ------------------------------------------------------------------
+// One poll of the relay: refreshes the client list and handles queued messages (logs, pairing, results).
+async function pollOnce(waitMs) {
+	const r = await relay("pc_poll", { owner: config.ownerSecret, wait: waitMs, instance: INSTANCE }, waitMs + 15000);
+	if (r.status !== 200) {
+		relayError = r.status === 401 ? "owner secret ไม่ถูกต้อง (ลบ ~/.claude-roblox-bridge.json แล้ว setup ใหม่)" : (r.data.error || `HTTP ${r.status}`);
+		return false;
+	}
+	relayError = null;
+	clients = r.data.clients || [];
+	pairedDevices = r.data.pairedDevices || 0;
+	for (const m of r.data.messages || []) {
+		if (m.kind === "result") {
+			const p = pending.get(String(m.id));
+			if (p) {
+				clearTimeout(p.timer);
+				pending.delete(String(m.id));
+				p.resolve(m);
+			}
+		} else if (m.kind === "logs") {
+			addLogs(m.clientId, m.entries);
+		} else if (m.kind === "paired") {
+			lastPaired = { player: m.player, at: new Date() };
+			log(`จับคู่สำเร็จกับ ${m.player}`);
+		}
+	}
+	return true;
+}
+
 async function pollLoop() {
 	let backoff = 1000;
+	let first = true;
 	for (;;) {
 		if (needSetup()) { await new Promise((r) => setTimeout(r, 500)); continue; }
-		const r = await relay("pc_poll", { owner: config.ownerSecret, wait: 25000, instance: INSTANCE }, 40000);
-		if (r.status === 200) {
-			relayError = null;
-			backoff = 1000;
-			clients = r.data.clients || [];
-			pairedDevices = r.data.pairedDevices || 0;
-			for (const m of r.data.messages || []) {
-				if (m.kind === "result") {
-					const p = pending.get(String(m.id));
-					if (p) {
-						clearTimeout(p.timer);
-						pending.delete(String(m.id));
-						p.resolve(m);
-					}
-				} else if (m.kind === "logs") {
-					addLogs(m.clientId, m.entries);
-				} else if (m.kind === "paired") {
-					lastPaired = { player: m.player, at: new Date() };
-					log(`จับคู่สำเร็จกับ ${m.player}`);
-				}
-			}
-		} else {
-			relayError = r.data.error || `HTTP ${r.status}`;
-			if (r.status === 401) relayError = "owner secret ไม่ถูกต้อง (ลบ ~/.claude-roblox-bridge.json แล้ว setup ใหม่)";
+		// first poll returns immediately so the client list is known right after startup
+		const ok = await pollOnce(first ? 0 : 25000);
+		first = false;
+		if (ok) backoff = 1000;
+		else {
 			log("relay error: " + relayError);
 			await new Promise((res) => setTimeout(res, backoff));
 			backoff = Math.min(backoff * 2, 15000);
@@ -326,7 +332,7 @@ async function callTool(name, args = {}) {
 		case "roblox_execute": {
 			if (typeof args.code !== "string") return text("ต้องใส่ code", true);
 			const timeout = Number(args.timeout) > 0 ? Number(args.timeout) : 15;
-			return formatResult(await sendCommand(pickClient(args.clientId), "exec", { code: args.code, chunkName: "mcp_exec" }, timeout));
+			return formatResult(await sendCommand(await pickClient(args.clientId), "exec", { code: args.code, chunkName: "mcp_exec" }, timeout));
 		}
 		case "roblox_run_file": {
 			const full = path.resolve(BASE_DIR, String(args.path || ""));
@@ -334,7 +340,7 @@ async function callTool(name, args = {}) {
 			let code;
 			try { code = fs.readFileSync(full, "utf8"); } catch (e) { return text("อ่านไฟล์ไม่ได้: " + e.message, true); }
 			const timeout = Number(args.timeout) > 0 ? Number(args.timeout) : 5;
-			return formatResult(await sendCommand(pickClient(args.clientId), "exec", { code, chunkName: path.basename(full) }, timeout));
+			return formatResult(await sendCommand(await pickClient(args.clientId), "exec", { code, chunkName: path.basename(full) }, timeout));
 		}
 		case "roblox_get_logs": {
 			const since = Number(args.since) || 0;
@@ -352,7 +358,7 @@ async function callTool(name, args = {}) {
 			return text(`latestSeq=${logSeq}  แสดง ${out.length}/${total} บรรทัด` + (lines.length ? "\n" + lines.join("\n") : "\n(ไม่มี log)"));
 		}
 		case "roblox_get_tree": {
-			const r = await sendCommand(pickClient(args.clientId), "tree", {
+			const r = await sendCommand(await pickClient(args.clientId), "tree", {
 				path: args.path || "game",
 				depth: args.depth !== undefined && Number(args.depth) >= 0 ? Number(args.depth) : 2,
 				maxChildren: Number(args.maxChildren) > 0 ? Number(args.maxChildren) : 50,
@@ -361,7 +367,7 @@ async function callTool(name, args = {}) {
 			return r.ok ? text(r.tree || "") : text(r.error || "error", true);
 		}
 		case "roblox_inspect": {
-			const r = await sendCommand(pickClient(args.clientId), "inspect", { path: args.path, require: !!args.require }, 20);
+			const r = await sendCommand(await pickClient(args.clientId), "inspect", { path: args.path, require: !!args.require }, 20);
 			return r.ok ? text(r.text || "") : text(r.error || "error", true);
 		}
 		default:
