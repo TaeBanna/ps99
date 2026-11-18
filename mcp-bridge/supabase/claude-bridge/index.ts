@@ -52,10 +52,11 @@ async function isDevice(token: unknown) {
 }
 
 // รอรับข้อความใน channel (long-poll) แล้วลบทิ้งเมื่อส่งออก
-async function consume(channel: string, waitMs: number, signal: AbortSignal) {
+async function consume(channel: string | string[], waitMs: number, signal: AbortSignal) {
+	const channels = Array.isArray(channel) ? channel : [channel];
 	const deadline = Date.now() + waitMs;
 	for (;;) {
-		const { data, error } = await db.from("bridge_messages").select("id, body").eq("channel", channel).order("id").limit(200);
+		const { data, error } = await db.from("bridge_messages").select("id, body").in("channel", channels).order("id").limit(200);
 		if (error) throw error;
 		if (data.length) {
 			if (signal.aborted) return [];
@@ -132,7 +133,9 @@ Deno.serve(async (req) => {
 				if (!(await isOwner(b.owner))) return json({ error: "unauthorized" }, 401);
 				await db.from("bridge_owner").update({ pc_seen: new Date().toISOString() }).eq("id", 1);
 				const wait = Math.min(Math.max(Number(b.wait) || 0, 0), 25000);
-				const messages = await consume("pc", wait, req.signal);
+				// Each PC server instance has its own inbox for command results (several Claude windows may run at once)
+				const inst = typeof b.instance === "string" && b.instance ? cleanId(b.instance) : null;
+				const messages = await consume(inst ? ["pc:" + inst, "pc"] : ["pc"], wait, req.signal);
 				const { data: clients } = await db.from("bridge_clients").select("client_id, info, last_seen");
 				const { count } = await db.from("bridge_devices").select("token_hash", { count: "exact", head: true });
 				return json({ messages, clients: clients ?? [], pairedDevices: count ?? 0 });
@@ -173,7 +176,13 @@ Deno.serve(async (req) => {
 				const list = Array.isArray(b.messages) ? b.messages.slice(0, 50) : [];
 				if (list.length) {
 					const { error } = await db.from("bridge_messages").insert(
-						list.map((m: any) => ({ channel: "pc", body: { ...(m ?? {}), clientId } })),
+						list.map((m: any) => {
+							// command ids look like "<instance>~<seq>": route the result back to the server that sent it
+							const id = m && m.kind === "result" ? String(m.id ?? "") : "";
+							const tilde = id.indexOf("~");
+							const channel = tilde > 0 ? "pc:" + cleanId(id.slice(0, tilde)) : "pc";
+							return { channel, body: { ...(m ?? {}), clientId } };
+						}),
 					);
 					if (error) throw error;
 				}
