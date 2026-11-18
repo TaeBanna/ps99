@@ -19,7 +19,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
-const RELAY_URL = process.env.ROBLOX_BRIDGE_RELAY || "https://iutqukkvewkyzwpwyjee.supabase.co/functions/v1/claude-bridge";
+const RELAY_URL = process.env.ROBLOX_BRIDGE_RELAY || "https://nltqfqfjcaebdxfcjvvt.supabase.co/functions/v1/claude-bridge";
 const CONFIG_FILE = path.join(os.homedir(), ".claude-roblox-bridge.json");
 const BASE_DIR = path.resolve(process.env.ROBLOX_MCP_ROOT || path.join(__dirname, ".."));
 const SCRIPT_URL = "https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua";

@@ -15,7 +15,7 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local SCRIPT_URL = "https://raw.githubusercontent.com/TaeBanna/ps99/main/MCP_Bridge.lua"
-local RELAY_URL = "https://iutqukkvewkyzwpwyjee.supabase.co/functions/v1/claude-bridge"
+local RELAY_URL = "https://nltqfqfjcaebdxfcjvvt.supabase.co/functions/v1/claude-bridge"
 local SAVE_FILE = "ClaudeBridge.json"
 
 local genv = (getgenv and getgenv()) or shared
